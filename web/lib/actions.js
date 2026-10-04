@@ -34,7 +34,7 @@ async function performAction({ action, invoiceId = null, customerId = null, para
 
   // ---- invoice-level actions ----
   const inv = must(await supabase.from('invoices').select('*').eq('id', invoiceId).maybeSingle());
-  if (!inv) throw new Error('Invoice not found');
+  if (['paid', 'void'].includes(inv.status) && !['mark_paid', 'void'].includes(action)) throw new Error(`This invoice is already ${inv.status}`);
   let patch, type = action;
 
   switch (action) {
