@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Invoice Chaser</title>
+<style>
+  :root{--paper:#f2f4f3;--ink:#17211d;--muted:#5e6d66;--rule:#d3dad6;--late:#b3412e;--warn:#b98318;--ok:#2e7d5b;--link:#1f5f8b}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;font-variant-numeric:tabular-nums}
+  .wrap{max-width:1060px;margin:0 auto;padding:0 24px}
+  button,input,select,textarea{font:inherit;color:inherit}
+  button{cursor:pointer;background:none;border:1px solid var(--ink);border-radius:3px;padding:3px 10px;margin:0 4px 4px 0}
+  button:hover{background:var(--ink);color:#fff}
+  button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,a:focus-visible{outline:2px solid var(--link);outline-offset:2px}
+  button.solid{background:var(--ink);color:#fff;padding:7px 16px}
+  input,select,textarea{border:1px solid var(--rule);border-radius:3px;padding:7px 9px;background:#fff;width:100%}
+  a{color:var(--link)}
+  .muted{color:var(--muted)} .late{color:var(--late)} .warn{color:var(--warn)} .ok{color:var(--ok)}
+
+  #gate{max-width:340px;margin:18vh auto;padding:0 24px}
+  #gate h1{font-size:20px;margin:0 0 14px} #gate input{margin-bottom:10px}
+
+  header{display:flex;justify-content:space-between;align-items:baseline;padding:18px 0;border-bottom:1px solid var(--rule);gap:16px;flex-wrap:wrap}
+  header strong{font-size:16px} header .tools{font-size:13px}
+  #mode{display:none;padding:9px 0;font-size:14px;border-bottom:1px solid var(--rule)}
+  #mode.on{display:block}
+
+  .hero{padding:34px 0 22px}
+  .hero .sentence{font-size:clamp(24px,4vw,34px);line-height:1.2;font-weight:600;margin:0 0 22px;max-width:30ch}
+  #bar{display:flex;height:20px;background:#e3e8e5;gap:2px}
+  #bar span{display:block;min-width:3px}
+  .legend{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin:10px 0 0;font-size:13px}
+  .legend b{display:block;font-size:15px;font-weight:600}
+  .sub{margin:18px 0 0;color:var(--muted);font-size:14px}
+
+  nav{display:flex;gap:22px;border-bottom:1px solid var(--rule);margin-top:10px;overflow-x:auto}
+  nav a{padding:12px 0;color:var(--muted);text-decoration:none;white-space:nowrap;border-bottom:2px solid transparent;cursor:pointer}
+  nav a.on{color:var(--ink);border-color:var(--ink);font-weight:600}
+
+  table{width:100%;border-collapse:collapse;margin:6px 0 40px}
+  th{text-align:left;font-weight:500;color:var(--muted);font-size:13px;padding:10px 8px 6px 0;border-bottom:1px solid var(--rule)}
+  td{padding:10px 8px 10px 0;border-bottom:1px solid var(--rule);vertical-align:top}
+  .r{text-align:right}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;background:var(--muted)}
+  .row{padding:14px 0;border-bottom:1px solid var(--rule)}
+  .row .top{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
+  .quote{color:var(--muted);margin:4px 0 0;max-width:80ch}
+  .filters{display:flex;gap:10px;margin:16px 0 4px}.filters input{max-width:260px}.filters select{max-width:200px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px 18px;max-width:640px}
+  .grid2 label{font-size:13px;color:var(--muted)} .full{grid-column:1/-1}
+  #msg{margin:12px 0;min-height:22px}
+  .empty{padding:36px 0;color:var(--muted)}
+  @media (max-width:700px){.legend{grid-template-columns:repeat(2,1fr)}.grid2{grid-template-columns:1fr}.hide-s{display:none}}
+</style>
+</head>
+<body>
+
+<div id="gate">
+  <h1>Invoice Chaser</h1>
+  <input id="tok" type="password" placeholder="Access token" autocomplete="current-password" aria-label="Access token">
+  <button class="solid" id="enter">Sign in</button>
+  <p id="gateMsg" class="late"></p>
+</div>
+
+<div id="app" hidden>
+  <div class="wrap">
+    <header>
+      <strong id="biz"></strong>
+      <span class="tools"><span id="health" class="muted"></span> &nbsp; <button id="refresh">Refresh</button><button id="signout">Sign out</button></span>
+    </header>
+    <div id="mode"></div>
+
+    <section class="hero">
+      <p class="sentence" id="sentence"></p>
+      <div id="bar" role="img" aria-label="Money owed, split by how late it is"></div>
+      <div class="legend" id="legend"></div>
+      <p class="sub" id="subline"></p>
+    </section>
+
+    <nav id="tabs"></nav>
+    <section id="view"></section>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const getToken = () => localStorage.getItem('icToken') || '';
+let D = null, tab = 'attention', filter = { status: 'all', q: '' };
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, { ...opts, headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + getToken() } });
+  const body = await res.json().catch(() => ({}));
+  if (res.status === 401) { localStorage.removeItem('icToken'); showGate('That token was not accepted.'); throw new Error('unauthorized'); }
+  if (!res.ok) throw new Error(body.error || res.statusText);
+  return body;
+}
+const money = c => new Intl.NumberFormat(D.locale, { style: 'currency', currency: D.currency }).format((c || 0) / 100);
+const ago = ts => { if (!ts) return 'never'; const m = Math.round((Date.now() - new Date(ts)) / 60000); return m < 1 ? 'just now' : m < 60 ? m + ' min ago' : m < 1440 ? Math.round(m / 60) + ' h ago' : Math.round(m / 1440) + ' d ago'; };
+const when = ts => new Date(ts).toLocaleString(D.locale, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+const label = s => String(s || '').replace(/_/g, ' ');
+
+function showGate(msg) { $('#app').hidden = true; $('#gate').hidden = false; $('#gateMsg').textContent = msg || ''; }
+
+async function load() {
+  D = await api('/api/dashboard-data');
+  $('#gate').hidden = true; $('#app').hidden = false;
+  render();
+}
+
+const COLORS = ['#5f9b7a', '#c9a23a', '#d98a2b', '#c4572f', '#9e2f2f'];
+const STATUS_COLOR = { open: 'var(--warn)', promised: 'var(--ok)', payment_claimed: 'var(--link)', disputed: 'var(--late)', on_hold: 'var(--muted)', escalated: 'var(--late)' };
+
+function render() {
+  const m = D.metrics;
+  $('#biz').textContent = D.business;
+  document.title = 'Invoice Chaser — ' + D.business;
+
+  const mode = $('#mode');
+  mode.className = D.dryRun || D.testOverride ? 'on' : '';
+  mode.innerHTML = D.dryRun
+    ? '<strong>Dry run.</strong> Nothing is being sent to customers; reminders are only logged. Set DRY_RUN=false in Vercel to go live.'
+    : '<strong>Test mode.</strong> Every customer email is being redirected to you (TEST_EMAIL_OVERRIDE).';
+
+  const job = n => (D.jobs.find(j => j.job === n) || {});
+  const stale = (n, mins) => !job(n).last_run_at || (Date.now() - new Date(job(n).last_run_at)) / 60000 > mins;
+  $('#health').innerHTML = `Inbox checked <span class="${stale('inbox', 30) ? 'late' : ''}">${ago(job('inbox').last_run_at)}</span> · Chase ran <span class="${stale('chase', 180) ? 'late' : ''}">${ago(job('chase').last_run_at)}</span>`;
+
+  $('#sentence').textContent = m.outstanding.cents === 0 ? 'Nothing is owed to you right now.'
+    : `You're owed ${money(m.outstanding.cents)}.` + (m.overdue.cents ? ` ${money(m.overdue.cents)} of it is late.` : ' None of it is late yet.');
+  const keys = Object.keys(m.aging), total = m.outstanding.cents || 1;
+  $('#bar').innerHTML = keys.map((k, i) => m.aging[k].cents ? `<span style="width:${(m.aging[k].cents / total) * 100}%;background:${COLORS[i]}" title="${esc(m.aging[k].label)}"></span>` : '').join('');
+  $('#legend').innerHTML = keys.map((k, i) => `<div><span class="dot" style="background:${COLORS[i]}"></span>${esc(m.aging[k].label)}<b>${money(m.aging[k].cents)}</b><span class="muted">${m.aging[k].count} invoice${m.aging[k].count === 1 ? '' : 's'}</span></div>`).join('');
+  const promised = m.promisedNext7.reduce((s, x) => s + x.cents, 0);
+  $('#subline').textContent = `Collected in the last 7 days: ${money(m.collected.week.cents)}. ` + (m.avgDaysToPay !== null ? `Customers take ${m.avgDaysToPay} days to pay on average. ` : '') + (promised ? `${money(promised)} is promised for the next 7 days.` : '');
+
+  const tabs = [['attention', `Needs you (${D.attention.length})`], ['invoices', `Invoices (${D.invoices.length})`], ['replies', 'Replies'], ['activity', 'Activity'], ['add', 'Add invoices']];
+  $('#tabs').innerHTML = tabs.map(([k, t]) => `<a data-tab="${k}" class="${tab === k ? 'on' : ''}" tabindex="0" role="button">${esc(t)}</a>`).join('');
+  $('#view').innerHTML = ({ attention: viewAttention, invoices: viewInvoices, replies: viewReplies, activity: viewActivity, add: viewAdd })[tab]();
+}
+
+const btn = (act, id, text, extra = '') => `<button data-act="${act}" data-id="${esc(id)}" ${extra}>${esc(text)}</button>`;
+function buttonsFor(i) {
+  const paid = btn('mark_paid', i.id, 'Paid');
+  if (i.status === 'open') return paid + btn('snooze', i.id, 'Snooze') + btn('set_promise', i.id, 'Promise date') + btn('stop', i.id, 'Stop');
+  if (i.status === 'escalated') return paid + btn('resume', i.id, 'Resume') + btn('snooze', i.id, 'Snooze') + btn('void', i.id, 'Void');
+  return paid + btn('resume', i.id, 'Resume') + btn('void', i.id, 'Void');
+}
+
+function viewAttention() {
+  if (!D.attention.length) return '<div class="empty">Nothing needs you. Every open invoice is on its normal reminder schedule.</div>';
+  const REASON = { disputed: 'Disputed', escalated: 'Needs a personal call', payment_claimed: 'Says they paid: check your bank', on_hold: 'On hold', no_contact: 'Cannot be contacted' };
+  return D.attention.map(a => {
+    const inv = D.invoices.find(i => i.id === a.id);
+    const extra = a.reason === 'no_contact' ? btn('allow_contact', a.customerId, 'Allow contact again', `data-cid="${esc(a.customerId)}"`) : '';
+    return `<div class="row"><div class="top"><div><strong>${esc(a.customer)}</strong> · ${esc(a.invoice)} · ${money(a.cents)}${a.late > 0 ? ` · <span class="late">${a.late} days late</span>` : ''}</div><div>${esc(REASON[a.reason])}</div></div>
+    ${a.note ? `<p class="quote">${esc(a.note)}</p>` : ''}<div style="margin-top:8px">${inv ? buttonsFor(inv) : ''}${extra}</div></div>`;
+  }).join('');
+}
+
+function viewInvoices() {
+  const q = filter.q.toLowerCase();
+  const rows = D.invoices.filter(i => (filter.status === 'all' || i.status === filter.status) && (!q || `${i.number} ${i.customer} ${i.email}`.toLowerCase().includes(q)));
+  const statuses = ['all', 'open', 'promised', 'payment_claimed', 'disputed', 'on_hold', 'escalated'];
+  return `<div class="filters"><input id="q" placeholder="Search customer or invoice" value="${esc(filter.q)}" aria-label="Search"><select id="st" aria-label="Status">${statuses.map(s => `<option value="${s}" ${filter.status === s ? 'selected' : ''}>${s === 'all' ? 'Every status' : label(s)}</option>`).join('')}</select></div>
+  <table><thead><tr><th>Customer</th><th>Invoice</th><th class="r">Balance</th><th class="r">Late</th><th>Status</th><th class="hide-s">Reminders</th><th></th></tr></thead><tbody>
+  ${rows.map(i => `<tr><td>${esc(i.customer)}<div class="muted">${esc(i.email || '')}</div></td><td>${i.url ? `<a href="${esc(i.url)}" target="_blank" rel="noopener">${esc(i.number)}</a>` : esc(i.number)}</td><td class="r">${money(i.cents)}</td>
+  <td class="r ${i.late > 0 ? 'late' : 'muted'}">${i.late > 0 ? i.late + ' d' : 'due ' + esc(i.due)}</td>
+  <td><span class="dot" style="background:${STATUS_COLOR[i.status] || 'var(--muted)'}"></span>${esc(label(i.status))}${i.promised && i.status === 'promised' ? `<div class="muted">by ${esc(i.promised)}</div>` : ''}${i.note ? `<div class="muted">${esc(i.note)}</div>` : ''}</td>
+  <td class="hide-s">${i.reminders}${i.lastReminder ? `<div class="muted">${ago(i.lastReminder)}</div>` : ''}</td><td>${buttonsFor(i)}</td></tr>`).join('') || '<tr><td colspan="7" class="empty">No invoices match.</td></tr>'}
+  </tbody></table>`;
+}
+
+function viewReplies() {
+  if (!D.replies.length) return '<div class="empty">No replies yet. When a customer answers a reminder, the AI reads it and it shows up here.</div>';
+  return D.replies.map(r => {
+    const who = (r.customers && r.customers.name) || r.from_address || 'Unknown';
+    const note = r.kind === 'reply' ? `${label(r.intent)} · ${Math.round((r.confidence || 0) * 100)}% sure` : label(r.kind);
+    return `<div class="row"><div class="top"><div><strong>${esc(who)}</strong> <span class="muted">${esc(r.channel)} · ${when(r.created_at)}</span></div><div class="${r.needs_human ? 'warn' : 'muted'}">${esc(note)}</div></div>
+    ${r.ai_result && r.ai_result.summary ? `<p style="margin:6px 0 0">${esc(r.ai_result.summary)}</p>` : ''}<p class="quote">“${esc(String(r.body_text || '').replace(/\s+/g, ' ').slice(0, 280))}”</p>
+    <p class="muted" style="margin:4px 0 0;font-size:13px">${esc(label(r.action_taken))}</p></div>`;
+  }).join('');
+}
+
+function viewActivity() {
+  if (!D.events.length) return '<div class="empty">No activity yet.</div>';
+  return `<table><tbody>${D.events.map(e => `<tr><td class="muted" style="white-space:nowrap">${when(e.created_at)}</td><td>${esc(label(e.type))}</td><td>${esc((e.customers && e.customers.name) || '')}</td><td>${esc((e.invoices && e.invoices.invoice_number) || '')}</td></tr>`).join('')}</tbody></table>`;
+}
+
+function viewAdd() {
+  return `<div style="padding:22px 0 40px"><h2 style="font-size:17px;margin:0 0 12px">Add one invoice</h2>
+  <form id="addForm" class="grid2">
+    <div><label for="f_cn">Customer</label><input id="f_cn" required></div><div><label for="f_em">Billing email</label><input id="f_em" type="email" required></div>
+    <div><label for="f_ct">Contact first name (optional)</label><input id="f_ct"></div><div><label for="f_no">Invoice number</label><input id="f_no" required></div>
+    <div><label for="f_am">Amount</label><input id="f_am" inputmode="decimal" required></div><div><label for="f_du">Due date</label><input id="f_du" type="date" required></div>
+    <div class="full"><label for="f_ur">Pay or PDF link (optional)</label><input id="f_ur" type="url"></div>
+    <div class="full"><button class="solid" type="submit">Add invoice</button></div></form>
+  <h2 style="font-size:17px;margin:30px 0 6px">Or import a spreadsheet</h2>
+  <p class="muted" style="margin:0 0 10px;max-width:70ch">Export your invoices as CSV from QuickBooks, Xero, FreshBooks or a spreadsheet and paste or choose the file. Column names are matched automatically (Invoice, Customer, Email, Total, Balance, Due Date…). Re-importing is safe: existing invoices are updated, never duplicated, and anything marked paid stops being chased.</p>
+  <input type="file" id="csvFile" accept=".csv,text/csv" style="margin-bottom:8px;max-width:340px"><textarea id="csvText" rows="6" placeholder="…or paste CSV here"></textarea>
+  <p><button class="solid" id="csvGo">Import</button></p><div id="msg" role="status"></div></div>`;
+}
+
+document.addEventListener('click', async e => {
+  const t = e.target.closest('[data-tab]');
+  if (t) { tab = t.dataset.tab; return render(); }
+  if (e.target.id === 'enter') { localStorage.setItem('icToken', $('#tok').value.trim()); return load().catch(err => { if (err.message !== 'unauthorized') showGate(err.message); }); }
+  if (e.target.id === 'refresh') return load();
+  if (e.target.id === 'signout') { localStorage.removeItem('icToken'); return showGate(''); }
+  if (e.target.id === 'csvGo') return importCsv();
+  const b = e.target.closest('[data-act]');
+  if (!b) return;
+  const action = b.dataset.act, id = b.dataset.id;
+  const params = {};
+  if (action === 'snooze') { const d = prompt('Pause reminders for how many days?', '7'); if (!d) return; params.days = Number(d); }
+  if (action === 'set_promise') { const d = prompt('Customer says they will pay on (YYYY-MM-DD):'); if (!d) return; params.date = d.trim(); }
+  if (action === 'void' && !confirm('Void this invoice? It will no longer be chased or counted.')) return;
+  if (action === 'mark_paid' && !confirm('Mark this invoice as paid?')) return;
+  try {
+    await api('/api/invoice-action', { method: 'POST', body: JSON.stringify(action === 'allow_contact' ? { action, customerId: b.dataset.cid } : { action, invoiceId: id, params }) });
+    await load();
+  } catch (err) { alert(err.message); }
+});
+
+document.addEventListener('input', e => { if (e.target.id === 'q') { filter.q = e.target.value; const pos = e.target.selectionStart; $('#view').innerHTML = viewInvoices(); const q = $('#q'); q.focus(); q.setSelectionRange(pos, pos); } });
+document.addEventListener('change', e => { if (e.target.id === 'st') { filter.status = e.target.value; render(); } });
+document.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.id === 'tok') $('#enter').click(); if (e.key === 'Enter' && e.target.dataset && e.target.dataset.tab) e.target.click(); });
+
+document.addEventListener('submit', async e => {
+  if (e.target.id !== 'addForm') return;
+  e.preventDefault();
+  const v = id => $('#' + id).value.trim();
+  const msg = $('#addForm').insertAdjacentElement('afterend', Object.assign(document.createElement('p'), { textContent: 'Saving…' }));
+  try {
+    const r = await api('/api/ingest', { method: 'POST', body: JSON.stringify({ invoice: { customer_name: v('f_cn'), customer_email: v('f_em'), contact_name: v('f_ct'), invoice_number: v('f_no'), amount: v('f_am'), due_date: v('f_du'), invoice_url: v('f_ur') } }) });
+    if (r.errors && r.errors.length) throw new Error(r.errors[0].error);
+    await load(); tab = 'invoices'; render();
+  } catch (err) { msg.textContent = err.message; msg.className = 'late'; }
+});
+
+async function importCsv() {
+  const file = $('#csvFile').files[0];
+  const text = file ? await file.text() : $('#csvText').value;
+  if (!text.trim()) { $('#msg').textContent = 'Choose a file or paste some CSV first.'; return; }
+  $('#msg').textContent = 'Importing…';
+  try {
+    const r = await api('/api/ingest', { method: 'POST', body: JSON.stringify({ csv: text }) });
+    $('#msg').innerHTML = `Created ${r.created}, updated ${r.updated}, marked paid ${r.paid}, skipped ${r.ignored}.` +
+      (r.unmappedColumns && r.unmappedColumns.length ? `<br><span class="muted">Ignored columns: ${esc(r.unmappedColumns.join(', '))}</span>` : '') +
+      (r.errors && r.errors.length ? `<br><span class="late">${r.errors.length} row(s) skipped:</span><br>${r.errors.slice(0, 8).map(x => `Line ${esc(x.line)}: ${esc(x.error)}`).join('<br>')}` : '');
+    await load(); $('#msg').scrollIntoView();
+  } catch (err) { $('#msg').textContent = err.message; }
+}
+
+if (getToken()) load().catch(err => { if (err.message !== 'unauthorized') showGate(err.message); }); else showGate('');
+</script>
+</body>
+</html>
