@@ -24,17 +24,17 @@ const COPY = {
     close: () => `If anything is holding payment up — a missing PO number, a question about the invoice, or someone else who handles payments — just reply to this email and we'll sort it out.`
   },
   follow_up: {
-    subject: ({ r, n }) => (n === 1 ? `Following up: invoice ${r[0].number} is ${r[0].overdue} days past due` : `Following up: ${n} invoices are past due`),
-    intro: ({ n }) => `Following up on my earlier note — ${n === 1 ? 'the invoice below is' : 'the invoices below are'} now past due.`,
+    subject: ({ r, n }) => (n === 1 ? `Following up: invoice ${r[0].number} is ${r[0].overdue} days overdue` : `Following up: ${n} invoices are overdue`),
+    intro: ({ n }) => `Following up on my earlier note — ${n === 1 ? 'the invoice below is' : 'the invoices below are'} now overdue.`,
     close: () => `Could you let me know when we can expect payment? A one-line reply with the expected date is all I need. If there's a problem with the invoice, tell me and I'll sort it out with you.`
   },
   firm: {
-    subject: ({ r, n }) => (n === 1 ? `Past due: invoice ${r[0].number} — ${r[0].amount}` : `Past due: ${n} invoices need attention`),
-    intro: ({ n }) => `${n === 1 ? 'The invoice below is' : 'The invoices below are'} now well past due and we haven't had a reply yet.`,
+    subject: ({ r, n }) => (n === 1 ? `Overdue: invoice ${r[0].number} — ${r[0].amount}` : `Overdue: ${n} invoices need attention`),
+    intro: ({ n }) => `${n === 1 ? 'The invoice below is' : 'The invoices below are'} now well overdue and we haven't had a reply yet.`,
     close: () => `Please arrange payment this week, or reply and tell us if something is wrong with the invoice so we can resolve it. If payment has already been sent, please share the date and a reference so we can match it.`
   },
   final: {
-    subject: ({ r, n }) => (n === 1 ? `Final reminder: invoice ${r[0].number} — ${r[0].amount} past due` : `Final reminder: ${n} past-due invoices`),
+    subject: ({ r, n }) => (n === 1 ? `Final reminder: invoice ${r[0].number} — ${r[0].amount} overdue` : `Final reminder: ${n} overdue invoices`),
     intro: ({ n }) => `This is our final automated reminder about ${n === 1 ? 'the invoice below' : 'the invoices below'}. ${n === 1 ? 'It remains' : 'They remain'} unpaid well after the due date.`,
     close: () => `Please reply today with a payment date, or get in touch so we can talk it through. If we don't hear from you, one of our team will follow up with you directly.`
   },
@@ -46,7 +46,7 @@ const COPY = {
 };
 
 function tableText(r) {
-  return r.map(x => `  - ${x.number} — ${x.amount} — due ${x.due}${x.overdue ? ` (${x.overdue} days past due)` : ''}${x.url ? `\n    ${x.url}` : ''}`).join('\n');
+  return r.map(x => `  - ${x.number} — ${x.amount} — due ${x.due}${x.overdue ? ` (${x.overdue} days overdue)` : ''}${x.url ? `\n    ${x.url}` : ''}`).join('\n');
 }
 
 function tableHtml(r) {
@@ -100,7 +100,7 @@ function renderSms({ tone, customer, invoices, cfg, today }) {
   const r = rowsOf(invoices, cfg, today);
   const name = customer.contact_name ? customer.contact_name.trim().split(/\s+/)[0] : '';
   const total = formatMoney(invoices.reduce((s, i) => s + balanceCents(i), 0), cfg.business.currency, cfg.business.locale);
-  const what = r.length === 1 ? `invoice ${r[0].number} (${r[0].amount}) is ${r[0].overdue} days past due` : `${r.length} invoices (${total}) are past due`;
+  const what = r.length === 1 ? `invoice ${r[0].number} (${r[0].amount}) is ${r[0].overdue} days overdue` : `${r.length} invoices (${total}) are overdue`;
   const lead = tone === 'broken_promise' ? 'We haven\'t seen the payment you mentioned yet' : tone === 'final' ? 'Final reminder' : 'Reminder';
   return `${name ? `Hi ${name}, ` : ''}${lead} from ${cfg.business.name}: ${what}. Details are in your email. Reply STOP to opt out.`;
 }

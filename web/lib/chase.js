@@ -7,6 +7,7 @@ const { renderReminder, renderSms } = require('./templates');
 const { sendCustomerEmail, sendCustomerSms } = require('./outbound');
 const { alertOwner } = require('./notify');
 const { formatMoney, balanceCents } = require('./money');
+const { isUkBankHoliday } = require('./bankholidays');
 
 async function runChase({ force = false, dryRun } = {}) {
   const cfg = getConfig();
@@ -15,6 +16,7 @@ async function runChase({ force = false, dryRun } = {}) {
   const nowISO = now.toISOString();
   const today = todayISO(cfg.business.timezone, now);
   if (!force && !inSendWindow(now, cfg)) return { skipped: 'outside_send_window', today };
+  if (!force && cfg.send.skipBankHolidays && await isUkBankHoliday(today, cfg.send.region)) return { skipped: 'bank_holiday', today };
 
   const invoices = await fetchAll(() =>
     supabase.from('invoices').select('*, customers(*)').in('status', ['open', 'promised', 'on_hold']).order('due_date').order('id'));

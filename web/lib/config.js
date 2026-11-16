@@ -39,9 +39,9 @@ function getConfig(env = process.env) {
     testSmsOverride: (env.TEST_SMS_OVERRIDE || '').trim() || null,
     business: {
       name,
-      timezone: env.BUSINESS_TIMEZONE || 'America/New_York',
-      locale: env.BUSINESS_LOCALE || 'en-US',
-      currency: (env.DEFAULT_CURRENCY || 'USD').toUpperCase(),
+      timezone: env.BUSINESS_TIMEZONE || 'Europe/London',   // UK defaults: a missing setting can no longer silently turn into US values
+      locale: env.BUSINESS_LOCALE || 'en-GB',
+      currency: (env.DEFAULT_CURRENCY || 'GBP').toUpperCase(),
       senderName: env.SENDER_NAME || `${name} Accounts`,
       signOff: env.SIGN_OFF_NAME || 'Accounts Receivable',
       paymentInstructions: (env.PAYMENT_INSTRUCTIONS || '').replace(/\\n/g, '\n').trim(),
@@ -53,7 +53,9 @@ function getConfig(env = process.env) {
       days: list(env.SEND_DAYS, ['Mon', 'Tue', 'Wed', 'Thu', 'Fri']),
       hourStart: num(env.SEND_HOUR_START, 9),
       hourEnd: num(env.SEND_HOUR_END, 17),
-      maxPerRun: num(env.MAX_SENDS_PER_RUN, 15)
+      maxPerRun: num(env.MAX_SENDS_PER_RUN, 15),
+      skipBankHolidays: bool(env.SKIP_BANK_HOLIDAYS, true),                     // UK: no reminders on bank holidays
+      region: (env.UK_REGION || 'england-and-wales').trim().toLowerCase()       // england-and-wales | scotland | northern-ireland
     },
     sequence: loadSequence(env.SEQUENCE_JSON),
     minGapDays: num(env.MIN_GAP_DAYS, 5),               // never email the same customer more often than this

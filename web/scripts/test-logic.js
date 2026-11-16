@@ -23,8 +23,7 @@ let passed = 0; const failures = [];
 const test = (name, fn) => { try { fn(); passed++; } catch (e) { failures.push(`✗ ${name}\n    ${e.message.split('\n')[0]}`); } };
 const eq = assert.deepStrictEqual;
 
-const cfg = getConfig({ BUSINESS_NAME: 'Acme Co', BUSINESS_TIMEZONE: 'America/New_York', PAYMENT_INSTRUCTIONS: 'ACH to 000-111\\nRef: invoice number', LATE_FEE_NOTE: 'A 1.5% monthly late fee applies.' });
-const TODAY = '2026-09-30', NOW = new Date('2026-09-30T15:00:00Z'), NOW_ISO = NOW.toISOString();   // a Wednesday, 11:00 in New York
+const cfg = getConfig({ BUSINESS_NAME: 'Acme Co', BUSINESS_TIMEZONE: 'America/New_York', BUSINESS_LOCALE: 'en-US', DEFAULT_CURRENCY: 'USD', PAYMENT_INSTRUCTIONS: 'ACH to 000-111\\nRef: invoice number', LATE_FEE_NOTE: 'A 1.5% monthly late fee applies.' });
 
 // ---------- dates ----------
 test('daysBetween / addDays / endOfMonth', () => {

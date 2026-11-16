@@ -12,9 +12,12 @@ const INTENTS = ['promise_to_pay', 'already_paid', 'dispute', 'extension_request
 
 function safetyScan(text) {
   const t = String(text || '');
-  if (/\b(bankrupt(cy)?|chapter\s*(7|11|13)|insolven(t|cy)|receivership|in administration)\b/i.test(t)) return 'bankruptcy';
-  if (/\b(lawyers?|attorneys?|solicitors?|legal (action|counsel|team|department)|lawsuit|litigation|sue (you|us|them)|suing|cease (and|&) desist|small claims|subpoena|harass(ing|ment)|attorney general|better business bureau)\b/i.test(t)) return 'legal';
-  if (/\b(unsubscribe|remove me|take me off|stop (emailing|e-mailing|contacting|texting|messaging|sending|bothering)|do not (contact|email|text)|don'?t (contact|email|text))\b/i.test(t)) return 'stop';
+  // Insolvency: US words plus the UK ones (administration, liquidators, winding-up petition, CVA).
+  if (/\b(bankrupt(cy)?|chapter\s*(7|11|13)|insolven(t|cy)|receivership|in administration|entered (into )?administration|administrators? (has|have|was|were|are) (been )?appointed|liquidators?|(in|into) liquidation|winding[- ]up (petition|order|proceedings)|company voluntary arrangement|CVA|insolvency practitioner)\b/i.test(t)) return 'bankruptcy';
+  // Legal: US words plus the UK ones (CCJ, county court, statutory demand, letter before action, ombudsman).
+  if (/\b(lawyers?|attorneys?|solicitors?|barristers?|legal (action|counsel|team|department|advis[eo]rs?)|lawsuit|litigation|sue (you|us|them)|suing|cease (and|&) desist|small claims|county court|CCJ|statutory demand|letter before (action|claim)|ombudsman|trading standards|take (you|us|them|this|it|the matter) to court|subpoena|harass(ing|ment)|attorney general|better business bureau)\b/i.test(t)) return 'legal';
+  // Stop: "stop contacting me", plus UK GDPR requests (subject access, erasure), which a person must handle.
+  if (/\b(unsubscribe|remove me|take me off|stop (emailing|e-mailing|contacting|texting|messaging|sending|bothering)|do not (contact|email|text)|don'?t (contact|email|text)|subject access request|right to (be forgotten|erasure)|(delete|erase|remove) (all )?my (personal )?(data|details|information))\b/i.test(t)) return 'stop';
   return null;
 }
 
@@ -49,13 +52,13 @@ Return ONE JSON object and nothing else:
 }
 
 Intent guide:
-- promise_to_pay: says they WILL pay, with or without a date ("paying Friday", "check goes out next week"). promised_date = that date.
-- already_paid: says payment was already sent, made or processed. paid_date = when, if said.
+- promise_to_pay: says they WILL pay, with or without a date ("paying Friday", "cheque goes out next week"). promised_date = that date.
+- already_paid: says payment was already sent, made or processed (for example by BACS, Faster Payments, bank transfer or cheque). paid_date = when, if said.
 - dispute: disagrees with the amount, says the work or goods were not delivered or were faulty, or says they do not owe it or it is not theirs.
 - extension_request: asks for more time before paying. promised_date = the date they ask for, if any.
 - payment_plan_request: asks to pay in instalments, or part now and part later.
 - cannot_pay: says they cannot pay or have cash-flow problems, and gives no date.
-- needs_invoice_copy: asks for a copy of the invoice, a statement, a PO match, a W-9, or payment details.
+- needs_invoice_copy: asks for a copy of the invoice, a statement, a PO match, a VAT invoice, or payment details.
 - wrong_contact: says they are not the right person; points to someone else (put that person in new_contact_*).
 - stop_request: asks not to be contacted again.
 - legal_or_hostile: mentions lawyers, legal action, bankruptcy or harassment, or is abusive.
@@ -63,7 +66,7 @@ Intent guide:
 - other: anything else, or unclear.
 If several apply, pick the first one in this priority order: legal_or_hostile, stop_request, dispute, already_paid, payment_plan_request, extension_request, promise_to_pay, cannot_pay, needs_invoice_copy, wrong_contact, acknowledged, other.
 
-Dates: resolve relative dates against the MESSAGE date using the calendar provided. "Friday" means the next Friday on or after the message date. "this week" or "next week" with no weekday means that week's Friday, with confidence at most 0.6. "End of month" is the last day of the month. If the timing is vague ("soon", "shortly", "ASAP"), promised_date is null. Never invent a date.`;
+Dates: resolve relative dates against the MESSAGE date using the calendar provided. "Friday" means the next Friday on or after the message date. "this week" or "next week" with no weekday means that week's Friday, with confidence at most 0.6. "End of month" is the last day of the month. If the timing is vague ("soon", "shortly", "ASAP"), promised_date is null. Never invent a date. Dates written with slashes are day first, UK style: 03/04 means 3 April, not 4 March.`;
 
 function buildMessages({ cfg, today, receivedISO, customer, invoices, replyText }) {
   const list = invoices.map(i =>
