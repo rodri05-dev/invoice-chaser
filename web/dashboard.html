@@ -125,7 +125,8 @@ function render() {
 
   const job = n => (D.jobs.find(j => j.job === n) || {});
   const stale = (n, mins) => !job(n).last_run_at || (Date.now() - new Date(job(n).last_run_at)) / 60000 > mins;
-  $('#health').innerHTML = `Inbox checked <span class="${stale('inbox', 30) ? 'late' : ''}">${ago(job('inbox').last_run_at)}</span> · Chase ran <span class="${stale('chase', 180) ? 'late' : ''}">${ago(job('chase').last_run_at)}</span>`;
+    const ai = D.ai ? ` · AI today <span class="${D.ai.percent >= D.ai.alertPercent ? 'warn' : ''}" title="${esc(D.ai.tokens.toLocaleString(D.locale))} of ${esc(D.ai.limit.toLocaleString(D.locale))} tokens on ${esc(D.ai.model)}${D.ai.fallbackCalls ? ` · ${D.ai.fallbackCalls} answered by a fallback model` : ''}">${D.ai.percent}%</span>` : '';
+  $('#health').innerHTML = `Inbox checked <span class="${stale('inbox', 30) ? 'late' : ''}">${ago(job('inbox').last_run_at)}</span> · Chase ran <span class="${stale('chase', 180) ? 'late' : ''}">${ago(job('chase').last_run_at)}</span>` + ai;
 
   $('#sentence').textContent = m.outstanding.cents === 0 ? 'Nothing is owed to you right now.'
     : `You're owed ${money(m.outstanding.cents)}.` + (m.overdue.cents ? ` ${money(m.overdue.cents)} of it is late.` : ' None of it is late yet.');
