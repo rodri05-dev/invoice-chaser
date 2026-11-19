@@ -54,16 +54,16 @@ Return ONE JSON object and nothing else:
 Intent guide:
 - promise_to_pay: says they WILL pay, with or without a date ("paying Friday", "cheque goes out next week"). promised_date = that date.
 - already_paid: says payment was already sent, made or processed (for example by BACS, Faster Payments, bank transfer or cheque). paid_date = when, if said.
-- dispute: disagrees with the amount, says the work or goods were not delivered or were faulty, or says they do not owe it or it is not theirs.
+- dispute: disagrees with the amount, says the work or goods were not delivered or were faulty, or says they do not owe it. This includes "this is not our invoice", "we have no account with you", "we never ordered this" and "we are not the company named on it". Anything about whether the money is OWED is a dispute, never wrong_contact.
 - extension_request: asks for more time before paying. promised_date = the date they ask for, if any.
 - payment_plan_request: asks to pay in instalments, or part now and part later.
 - cannot_pay: says they cannot pay or have cash-flow problems, and gives no date.
 - needs_invoice_copy: asks for a copy of the invoice, a statement, a PO match, a VAT invoice, or payment details.
-- wrong_contact: says they are not the right person; points to someone else (put that person in new_contact_*).
+- wrong_contact: says the person writing is not the right one to deal with PAYMENT, and points to a colleague, another department or a new email address (put that person in new_contact_*). It is only about WHO should handle the invoice. If the message says the invoice itself is not theirs, that is a dispute. If it only asks who to talk to about something else (orders, sales, deliveries), that is other.
 - stop_request: asks not to be contacted again.
 - legal_or_hostile: mentions lawyers, legal action, bankruptcy or harassment, or is abusive.
 - acknowledged: acknowledges the email with no date, no dispute and no promise ("thanks, will look into it").
-- other: anything else, or unclear.
+- other: anything else, or unclear. This includes questions about other things (orders, deliveries, new work, who to contact about something that is not this invoice).
 If several apply, pick the first one in this priority order: legal_or_hostile, stop_request, dispute, already_paid, payment_plan_request, extension_request, promise_to_pay, cannot_pay, needs_invoice_copy, wrong_contact, acknowledged, other.
 
 Dates: resolve relative dates against the MESSAGE date using the calendar provided. "Friday" means the next Friday on or after the message date. "this week" or "next week" with no weekday means that week's Friday, with confidence at most 0.6. "End of month" is the last day of the month. If the timing is vague ("soon", "shortly", "ASAP"), promised_date is null. Never invent a date. Dates written with slashes are day first, UK style: 03/04 means 3 April, not 4 March.`;

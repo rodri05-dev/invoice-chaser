@@ -1,6 +1,9 @@
-// node scripts/eval-replies.js [--quick]
+// node scripts/eval-replies.js [--quick | --recheck]
 // Measures how well the AI reads customer replies, using realistic UK replies with known answers.
-//   --quick   runs about a third of the AI cases (about 3 minutes instead of 8)
+//   --quick     runs about a third of the AI cases (about 3 minutes instead of 8)
+//   --recheck   runs ONLY the cases tagged recheck: true. These are the replies the AI got wrong before,
+//               plus new ones worded differently, to see whether a prompt fix really worked
+//               (9 cases, about 3 minutes). Safety-net cases are skipped.
 // It uses about 1,500 Groq tokens per AI case and waits 12 seconds between cases (Groq's free limit is
 // 8,000 tokens a minute). It tests ONE model: the fallback is switched off for this test.
 // To test the fallback model instead (PowerShell):  $env:GROQ_CHAT_MODEL='openai/gpt-oss-20b'; node scripts/eval-replies.js
@@ -35,7 +38,7 @@ const CASES = [
   { t: "We're disputing this invoice. The work was never completed.", intent: 'dispute' },
   { t: 'The amount is wrong. We agreed £800, not £1,250.', intent: 'dispute' },
   { t: 'We never received the goods.', intent: 'dispute' },
-  { t: "This isn't our invoice, we have no account with you.", intent: 'dispute' },
+  { t: "This isn't our invoice, we have no account with you.", intent: 'dispute', recheck: true },
   { t: "We can't pay until you send a credit note for the faulty units.", intent: 'dispute' },
   { t: 'The VAT on this looks incorrect, can you reissue it?', intent: 'dispute', alt: ['needs_invoice_copy'] },
   { t: 'Could we have until the 30th to pay this?', intent: 'extension_request', date: '2026-11-30' },
@@ -55,8 +58,16 @@ const CASES = [
   { t: 'Received, thank you.', intent: 'acknowledged' },
   { t: "Noted. I've passed it to accounts.", intent: 'acknowledged' },
   { t: 'Our office administrator is looking at it today.', intent: 'acknowledged' },
-  { t: 'Is Jo still the right person to speak to about orders?', intent: 'other', alt: ['acknowledged'] },
+  { t: 'Is Jo still the right person to speak to about orders?', intent: 'other', alt: ['acknowledged'], recheck: true },
   { t: 'Do you also do web design?', intent: 'other' },
+  // Added 19 Nov 2026 after the first full run. Different wording for the two earlier mistakes (recheck: true).
+  { t: 'We have never ordered anything from you, so we will not be paying this.', intent: 'dispute', recheck: true },
+  { t: "We've never dealt with your company. Why have we been sent this?", intent: 'dispute', recheck: true },
+  { t: 'We are not the company named on this invoice.', intent: 'dispute', recheck: true },
+  { t: 'Please speak to Priya in accounts payable, I only handle purchasing.', intent: 'wrong_contact', recheck: true },
+  { t: "I've moved to a different role. Please send invoices to finance@brindley-test.example instead.", intent: 'wrong_contact', recheck: true },
+  { t: 'Who is the best person to talk to about placing a new order?', intent: 'other', recheck: true },
+  { t: 'Can someone ring me about our delivery schedule?', intent: 'other', recheck: true },
   // safety net only (plain code, no AI):
   { t: 'Please pass this to our solicitor.', safety: 'legal' },
   { t: 'We have gone into administration.', safety: 'bankruptcy' },
@@ -74,10 +85,13 @@ const QUIET = ['promise_to_pay', 'acknowledged'];   // readings that do not aler
 
 async function main() {
   const quick = process.argv.includes('--quick');
-  const cases = CASES.filter((c, i) => c.safety !== undefined || !quick || i % 3 === 0);
+  const recheck = process.argv.includes('--recheck');
+  const cases = recheck
+    ? CASES.filter(c => c.recheck === true && c.safety === undefined)
+    : CASES.filter((c, i) => c.safety !== undefined || !quick || i % 3 === 0);
   const aiCases = cases.filter(c => c.safety === undefined);
   const model = modelList()[0];
-  console.log(`Model: ${model}. ${aiCases.length} AI cases + ${cases.length - aiCases.length} safety-net cases.`);
+  console.log(`Model: ${model}. ${aiCases.length} AI cases + ${cases.length - aiCases.length} safety-net cases${recheck ? ' (recheck: only the cases tagged for the prompt fix)' : ''}.`);
   if (GAP_MS > 0) console.log(`About ${Math.ceil(aiCases.length * (GAP_MS / 1000 + 3) / 60)} minutes (waiting between cases for Groq's free limit).\n`);
 
   const cfg = getConfig();
