@@ -12,12 +12,12 @@ const INTENTS = ['promise_to_pay', 'already_paid', 'dispute', 'extension_request
 
 function safetyScan(text) {
   const t = String(text || '');
-  // Insolvency: US words plus the UK ones (administration, liquidators, winding-up petition, CVA).
-  if (/\b(bankrupt(cy)?|chapter\s*(7|11|13)|insolven(t|cy)|receivership|in administration|entered (into )?administration|administrators? (has|have|was|were|are) (been )?appointed|liquidators?|(in|into) liquidation|winding[- ]up (petition|order|proceedings)|company voluntary arrangement|CVA|insolvency practitioner)\b/i.test(t)) return 'bankruptcy';
+  // Insolvency: US words plus the UK ones (administration, liquidators, "gone bust", winding-up petition, CVA).
+  if (/\b(bankrupt(cy)?|chapter\s*(7|11|13)|insolven(t|cy)|receivership|(gone|going|went|put|placed|entered|entering|go|goes) (in|into) administration|entered administration|(we|they|company|business|firm|ltd|limited|plc|llp)( are| is| were| was|'re|'s)? (now |currently )?in administration|administrators? (has|have|was|were|are) (been )?appointed|appointed (joint )?administrators|(gone|going|went) bust|liquidators?|(in|into) liquidation|voluntary liquidation|winding[- ]up (petition|order|proceedings)|company voluntary arrangement|CVA|insolvency practitioner)\b/i.test(t)) return 'bankruptcy';
   // Legal: US words plus the UK ones (CCJ, county court, statutory demand, letter before action, ombudsman).
   if (/\b(lawyers?|attorneys?|solicitors?|barristers?|legal (action|counsel|team|department|advis[eo]rs?)|lawsuit|litigation|sue (you|us|them)|suing|cease (and|&) desist|small claims|county court|CCJ|statutory demand|letter before (action|claim)|ombudsman|trading standards|take (you|us|them|this|it|the matter) to court|subpoena|harass(ing|ment)|attorney general|better business bureau)\b/i.test(t)) return 'legal';
   // Stop: "stop contacting me", plus UK GDPR requests (subject access, erasure), which a person must handle.
-  if (/\b(unsubscribe|remove me|take me off|stop (emailing|e-mailing|contacting|texting|messaging|sending|bothering)|do not (contact|email|text)|don'?t (contact|email|text)|subject access request|right to (be forgotten|erasure)|(delete|erase|remove) (all )?my (personal )?(data|details|information))\b/i.test(t)) return 'stop';
+  if (/\b(unsubscribe|remove me|take me off|stop (emailing|e-mailing|contacting|texting|messaging|sending|bothering)|do not (contact|email|text)|don'?t (contact|email|text)|opt(ing)?[- ]out|subject access request|right to (be forgotten|erasure)|(delete|erase|remove) (all )?my (personal )?(data|details|information))\b/i.test(t)) return 'stop';
   return null;
 }
 

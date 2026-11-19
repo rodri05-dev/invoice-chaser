@@ -87,6 +87,19 @@ test('uk: reminders read as UK English', () => {
   assert(sms.includes('overdue') && sms.includes('Reply STOP'));
 });
 
+test('uk: more everyday UK insolvency and opt-out wording', () => {
+  eq(C.safetyScan('We have gone into administration'), 'bankruptcy');
+  eq(C.safetyScan('The company is in administration'), 'bankruptcy');
+  eq(C.safetyScan("We're in administration"), 'bankruptcy');
+  eq(C.safetyScan('Brindley Ltd is in administration'), 'bankruptcy');
+  eq(C.safetyScan('We have appointed administrators'), 'bankruptcy');
+  eq(C.safetyScan('The company went bust last month'), 'bankruptcy');
+  eq(C.safetyScan('It is now in creditors voluntary liquidation'), 'bankruptcy');
+  eq(C.safetyScan('I want to opt out of these emails'), 'stop');
+  eq(C.safetyScan('I work in administration, not accounts'), null);
+  eq(C.safetyScan('Jo is in administration, send it to ap@x.example'), null);
+});
+
 console.log(failures.length ? failures.join('\n') : '');
 console.log(`${passed} passed, ${failures.length} failed`);
 process.exit(failures.length ? 1 : 0);
