@@ -4,8 +4,9 @@ const { supabase, must, logEvent } = require('./db');
 const { isValidISODate } = require('./dates');
 const { toCents } = require('./money');
 const { normEmail } = require('./util');
+const { updateTasks } = require('./tasks');
 
-const ACTIONS = ['mark_paid', 'resume', 'snooze', 'stop', 'void', 'set_promise', 'partial_payment', 'set_contact', 'allow_contact'];
+const ACTIONS = ['mark_paid', 'resume', 'snooze', 'stop', 'void', 'set_promise', 'partial_payment', 'set_contact', 'allow_contact', 'evidence_sent', 'credit_note_needed'];
 
 async function performAction({ action, invoiceId = null, customerId = null, params = {}, actor = 'owner' }) {
   if (!ACTIONS.includes(action)) throw new Error(`Unknown action: ${action}`);
@@ -69,9 +70,24 @@ async function performAction({ action, invoiceId = null, customerId = null, para
       type = paid >= inv.amount_cents ? 'mark_paid' : 'partial_payment';
       break;
     }
+    // The two dispute notes. The invoice stays "disputed", so chasing stays paused until you decide.
+    case 'evidence_sent':
+      if (inv.status !== 'disputed') throw new Error('This invoice is not in dispute');
+      patch = { status_note: 'Evidence sent to the customer. Waiting for their answer.' };
+      break;
+    case 'credit_note_needed':
+      if (inv.status !== 'disputed') throw new Error('This invoice is not in dispute');
+      patch = { status_note: 'Credit note needed. Raise it in your accounting software.' };
+      break;
   }
   const updated = must(await supabase.from('invoices').update(patch).eq('id', invoiceId).select().single());
   await logEvent({ invoiceId, customerId: inv.customer_id, type, details: { actor, ...params } });
+
+  // Keep the dispute task in step with what the owner just did (best effort: never blocks the action).
+  if (action === 'evidence_sent') await updateTasks(invoiceId, 'waiting_on_customer', patch.status_note);
+  else if (action === 'credit_note_needed') await updateTasks(invoiceId, 'credit_note_needed', patch.status_note);
+  else if (action === 'void') await updateTasks(invoiceId, 'cancelled');
+  else if (action === 'resume' || action === 'set_promise' || type === 'mark_paid') await updateTasks(invoiceId, 'resolved');
   return updated;
 }
 

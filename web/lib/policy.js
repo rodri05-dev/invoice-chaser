@@ -65,10 +65,13 @@ function decide({ cls, safety, customer, targets, allActive = [], senderKnown, c
     case 'dispute': {
       const cat = categoryOf(cls.dispute_category);
       const why = cls.dispute_reason ? `: ${cls.dispute_reason}` : '';
+      const note = `${labelOf(cat)}${why}`.slice(0, 300);
       out.label = 'disputed';
       out.disputeCategory = cat;
-      patchAll({ status: 'disputed', paused_until: null, status_note: `${labelOf(cat)}${why}`.slice(0, 300) }, 'disputed', { reason: cls.dispute_reason, category: cat });
-      alert('urgent', 'dispute', `${who} disputes ${nums} (${money}) — ${labelOf(cat)}`, [act('Resume chasing', 'resume'), act('Mark paid', 'mark_paid'), act('Void invoice', 'void')]);
+      patchAll({ status: 'disputed', paused_until: null, status_note: note }, 'disputed', { reason: cls.dispute_reason, category: cat });
+      out.task = { type: 'dispute', category: cat, note };      // inbound.js turns this into one open task per invoice
+      alert('urgent', 'dispute', `${who} disputes ${nums} (${money}) — ${labelOf(cat)}`,
+        [act('Evidence sent', 'evidence_sent'), act('Resolved — resume chasing', 'resume'), act('Credit note needed', 'credit_note_needed'), act('Mark paid', 'mark_paid'), act('Void invoice', 'void')]);
       out.alert.extraLines = disputeLines(cat);       // the fixed evidence checklist for this reason, shown to the owner only
       break;
     }

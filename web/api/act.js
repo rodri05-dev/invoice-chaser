@@ -16,7 +16,9 @@ const DESCRIBE = {
   void: () => 'Void this invoice — it will no longer be chased or counted',
   set_promise: p => `Record that payment is expected by ${p.date}`,
   set_contact: p => `Send future reminders to ${p.email}`,
-  allow_contact: () => 'Allow automatic contact with this customer again'
+    allow_contact: () => 'Allow automatic contact with this customer again',
+  evidence_sent: () => 'Record that you have sent the evidence to the customer',
+  credit_note_needed: () => 'Record that a credit note is needed (you raise it in your accounting software)'
 };
 
 const page = body => `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Invoice Chaser</title>

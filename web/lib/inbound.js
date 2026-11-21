@@ -9,6 +9,7 @@ const { decide } = require('./policy');
 const { renderAck } = require('./templates');
 const { sendCustomerEmail } = require('./outbound');
 const { alertOwner } = require('./notify');
+const { openDisputeTask } = require('./tasks');
 const { formatMoney, balanceCents } = require('./money');
 
 function ownerLines({ customer, targets, cfg, cls, text }) {
@@ -76,7 +77,8 @@ async function processInbound(msg) {
     await logEvent({ invoiceId: p.invoiceId, customerId: m.customer.id, type: p.event.type, details: { ...p.event.details, from_reply: true } });
   }
 
-  if (d.customerPatch) must(await supabase.from('customers').update(d.customerPatch).eq('id', m.customer.id));
+    if (d.customerPatch) must(await supabase.from('customers').update(d.customerPatch).eq('id', m.customer.id));
+  if (d.task) for (const t of targets) await openDisputeTask({ invoice: t, customer: m.customer, category: d.task.category, note: d.task.note, cfg, today });
 
   // 4) the fixed acknowledgement (at most one per customer per 24h, so two auto-responders can never loop)
   let ackNote = null;
