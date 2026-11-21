@@ -3,6 +3,7 @@
 // do more than this table allows: pause chasing for a bounded time, or ask YOU to look.
 const { daysBetween } = require('./dates');
 const { formatMoney, balanceCents } = require('./money');
+const { categoryOf, labelOf, disputeLines } = require('./disputes');
 
 const STATE_CHANGING = ['promise_to_pay', 'already_paid', 'extension_request', 'payment_plan_request', 'cannot_pay', 'dispute'];
 
@@ -61,11 +62,16 @@ function decide({ cls, safety, customer, targets, allActive = [], senderKnown, c
 
   // ---- the intents ----
   switch (cls.intent) {
-    case 'dispute':
+    case 'dispute': {
+      const cat = categoryOf(cls.dispute_category);
+      const why = cls.dispute_reason ? `: ${cls.dispute_reason}` : '';
       out.label = 'disputed';
-      patchAll({ status: 'disputed', paused_until: null, status_note: cls.dispute_reason || 'Customer disputes this invoice' }, 'disputed', { reason: cls.dispute_reason });
-      alert('urgent', 'dispute', `${who} disputes ${nums} (${money})`, [act('Resume chasing', 'resume'), act('Mark paid', 'mark_paid'), act('Void invoice', 'void')]);
+      out.disputeCategory = cat;
+      patchAll({ status: 'disputed', paused_until: null, status_note: `${labelOf(cat)}${why}`.slice(0, 300) }, 'disputed', { reason: cls.dispute_reason, category: cat });
+      alert('urgent', 'dispute', `${who} disputes ${nums} (${money}) — ${labelOf(cat)}`, [act('Resume chasing', 'resume'), act('Mark paid', 'mark_paid'), act('Void invoice', 'void')]);
+      out.alert.extraLines = disputeLines(cat);       // the fixed evidence checklist for this reason, shown to the owner only
       break;
+    }
 
     case 'already_paid': {
       out.label = 'payment_claimed';

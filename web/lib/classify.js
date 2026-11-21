@@ -6,6 +6,7 @@
 const { groqChat } = require('./groq');
 const { addDays, weekdayOf, endOfMonth, isValidISODate, daysBetween } = require('./dates');
 const { formatMoney, balanceCents } = require('./money');
+const { CATEGORIES } = require('./disputes');
 
 const INTENTS = ['promise_to_pay', 'already_paid', 'dispute', 'extension_request', 'payment_plan_request', 'cannot_pay',
   'needs_invoice_copy', 'wrong_contact', 'stop_request', 'legal_or_hostile', 'acknowledged', 'other'];
@@ -46,6 +47,7 @@ Return ONE JSON object and nothing else:
   "new_contact_name": string or null,
   "new_contact_email": string or null,
   "dispute_reason": string or null,
+  "dispute_category": one of ${CATEGORIES.join(' | ')} when the intent is dispute, otherwise null,
   "sentiment": "positive" | "neutral" | "negative" | "hostile",
   "summary": one plain sentence for the business owner, max 200 characters,
   "suggested_reply": a short polite draft the owner could send, max 500 characters. Never promise refunds, discounts or extensions in it.
@@ -54,17 +56,27 @@ Return ONE JSON object and nothing else:
 Intent guide:
 - promise_to_pay: says they WILL pay, with or without a date ("paying Friday", "cheque goes out next week"). promised_date = that date.
 - already_paid: says payment was already sent, made or processed (for example by BACS, Faster Payments, bank transfer or cheque). paid_date = when, if said.
-- dispute: disagrees with the amount, says the work or goods were not delivered or were faulty, or says they do not owe it. This includes "this is not our invoice", "we have no account with you", "we never ordered this" and "we are not the company named on it". Anything about whether the money is OWED is a dispute, never wrong_contact.
+- dispute: disagrees with the amount, says the work or goods were not delivered or were faulty, or says they do not owe it. This includes "this is not our invoice", "we have no account with you", "we never ordered this" and "we are not the company named on it". Anything about whether the money is OWED is a dispute, never wrong_contact. It also includes saying they cannot or will not pay until something is corrected, added or provided (a PO number, a missing document, a credit note).
 - extension_request: asks for more time before paying. promised_date = the date they ask for, if any.
 - payment_plan_request: asks to pay in instalments, or part now and part later.
 - cannot_pay: says they cannot pay or have cash-flow problems, and gives no date.
-- needs_invoice_copy: asks for a copy of the invoice, a statement, a PO match, a VAT invoice, or payment details.
+- needs_invoice_copy: asks for a copy of the invoice, a statement, a VAT invoice, or payment details. (If they say they cannot pay until a PO number is added to the invoice, that is a dispute.)
 - wrong_contact: says the person writing is not the right one to deal with PAYMENT, and points to a colleague, another department or a new email address (put that person in new_contact_*). It is only about WHO should handle the invoice. If the message says the invoice itself is not theirs, that is a dispute. If it only asks who to talk to about something else (orders, sales, deliveries), that is other.
 - stop_request: asks not to be contacted again.
 - legal_or_hostile: mentions lawyers, legal action, bankruptcy or harassment, or is abusive.
 - acknowledged: acknowledges the email with no date, no dispute and no promise ("thanks, will look into it").
 - other: anything else, or unclear. This includes questions about other things (orders, deliveries, new work, who to contact about something that is not this invoice).
 If several apply, pick the first one in this priority order: legal_or_hostile, stop_request, dispute, already_paid, payment_plan_request, extension_request, promise_to_pay, cannot_pay, needs_invoice_copy, wrong_contact, acknowledged, other.
+
+Dispute category: only when the intent is dispute (otherwise null). Pick the closest one:
+- missing_po: they need a PO number on the invoice (or the PO on it is wrong) before they can pay.
+- wrong_amount: the price, total, rate, discount, VAT or a double charge is wrong.
+- delivery_not_confirmed: they say the goods or service never arrived.
+- work_incomplete: the work was not finished, not done properly, or the goods were faulty.
+- wrong_quantity: the number of items, hours or days is wrong.
+- missing_paperwork: they need a document first (contract, timesheet, certificate, proof of delivery).
+- unapproved_extra_work: they say extra or additional work was never agreed or approved.
+- other: not their invoice, never ordered anything, or anything that does not fit the reasons above.
 
 Dates: resolve relative dates against the MESSAGE date using the calendar provided. "Friday" means the next Friday on or after the message date. "this week" or "next week" with no weekday means that week's Friday, with confidence at most 0.6. "End of month" is the last day of the month. If the timing is vague ("soon", "shortly", "ASAP"), promised_date is null. Never invent a date. Dates written with slashes are day first, UK style: 03/04 means 3 April, not 4 March.`;
 
@@ -96,8 +108,9 @@ function normalize(raw) {
   confidence = Number.isFinite(confidence) ? Math.min(1, Math.max(0, confidence)) : 0.5;
   const email = str(r.new_contact_email, 200);
   const partial = Number(r.partial_amount);
+  const intent = INTENTS.includes(r.intent) ? r.intent : 'other';
   return {
-    intent: INTENTS.includes(r.intent) ? r.intent : 'other',
+    intent,
     confidence,
     promised_date: date(r.promised_date),
     paid_date: date(r.paid_date),
@@ -108,6 +121,7 @@ function normalize(raw) {
     new_contact_name: str(r.new_contact_name, 120),
     new_contact_email: email && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) ? email.toLowerCase() : null,
     dispute_reason: str(r.dispute_reason, 300),
+    dispute_category: intent === 'dispute' ? (CATEGORIES.includes(r.dispute_category) ? r.dispute_category : 'other') : null,
     sentiment: ['positive', 'neutral', 'negative', 'hostile'].includes(r.sentiment) ? r.sentiment : 'neutral',
     summary: str(r.summary, 240) || 'No summary available.',
     suggested_reply: str(r.suggested_reply, 600)

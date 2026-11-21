@@ -1,9 +1,10 @@
-// node scripts/eval-replies.js [--quick | --recheck]
+// node scripts/eval-replies.js [--quick | --recheck | --disputes]
 // Measures how well the AI reads customer replies, using realistic UK replies with known answers.
 //   --quick     runs about a third of the AI cases (about 3 minutes instead of 8)
 //   --recheck   runs ONLY the cases tagged recheck: true. These are the replies the AI got wrong before,
 //               plus new ones worded differently, to see whether a prompt fix really worked
 //               (9 cases, about 3 minutes). Safety-net cases are skipped.
+//   --disputes  runs ONLY the dispute cases and also checks the dispute REASON the AI picked (about 5 minutes).
 // It uses about 1,500 Groq tokens per AI case and waits 12 seconds between cases (Groq's free limit is
 // 8,000 tokens a minute). It tests ONE model: the fallback is switched off for this test.
 // To test the fallback model instead (PowerShell):  $env:GROQ_CHAT_MODEL='openai/gpt-oss-20b'; node scripts/eval-replies.js
@@ -35,12 +36,12 @@ const CASES = [
   { t: 'Payment was made on 05/11/2026, please check your account.', intent: 'already_paid' },
   { t: 'Cheque sent two weeks ago, did you not get it?', intent: 'already_paid' },
   { t: 'Already settled, see the attached remittance.', intent: 'already_paid' },
-  { t: "We're disputing this invoice. The work was never completed.", intent: 'dispute' },
-  { t: 'The amount is wrong. We agreed £800, not £1,250.', intent: 'dispute' },
-  { t: 'We never received the goods.', intent: 'dispute' },
-  { t: "This isn't our invoice, we have no account with you.", intent: 'dispute', recheck: true },
-  { t: "We can't pay until you send a credit note for the faulty units.", intent: 'dispute' },
-  { t: 'The VAT on this looks incorrect, can you reissue it?', intent: 'dispute', alt: ['needs_invoice_copy'] },
+  { t: "We're disputing this invoice. The work was never completed.", intent: 'dispute', cat: 'work_incomplete' },
+  { t: 'The amount is wrong. We agreed £800, not £1,250.', intent: 'dispute', cat: 'wrong_amount' },
+  { t: 'We never received the goods.', intent: 'dispute', cat: 'delivery_not_confirmed' },
+  { t: "This isn't our invoice, we have no account with you.", intent: 'dispute', cat: 'other', recheck: true },
+  { t: "We can't pay until you send a credit note for the faulty units.", intent: 'dispute', cat: 'work_incomplete', catAlt: ['wrong_amount', 'wrong_quantity', 'other'] },
+  { t: 'The VAT on this looks incorrect, can you reissue it?', intent: 'dispute', alt: ['needs_invoice_copy'], cat: 'wrong_amount', catAlt: ['missing_paperwork', 'other'] },
   { t: 'Could we have until the 30th to pay this?', intent: 'extension_request', date: '2026-11-30' },
   { t: 'Can you give us a few more weeks please?', intent: 'extension_request', date: null },
   { t: 'Please can we pay in December? Cash flow is tight this month.', intent: 'extension_request', alt: ['cannot_pay', 'payment_plan_request'] },
@@ -50,7 +51,7 @@ const CASES = [
   { t: "Sorry, we don't have the funds this month.", intent: 'cannot_pay', alt: ['extension_request'] },
   { t: "Can you resend the invoice? We can't find it.", intent: 'needs_invoice_copy' },
   { t: 'Please send a VAT invoice and your bank details.', intent: 'needs_invoice_copy' },
-  { t: 'We need the PO number on this invoice before we can pay.', intent: 'needs_invoice_copy', alt: ['dispute'] },
+  { t: 'We need the PO number on this invoice before we can pay.', intent: 'dispute', alt: ['needs_invoice_copy'], cat: 'missing_po' },
   { t: "I don't deal with invoices any more. Please send these to accounts@brindley-test.example.", intent: 'wrong_contact' },
   { t: 'Wrong person, try our finance department.', intent: 'wrong_contact' },
   { t: 'I work in administration, not accounts. Try ap@brindley-test.example.', intent: 'wrong_contact' },
@@ -61,13 +62,22 @@ const CASES = [
   { t: 'Is Jo still the right person to speak to about orders?', intent: 'other', alt: ['acknowledged'], recheck: true },
   { t: 'Do you also do web design?', intent: 'other' },
   // Added 19 Nov 2026 after the first full run. Different wording for the two earlier mistakes (recheck: true).
-  { t: 'We have never ordered anything from you, so we will not be paying this.', intent: 'dispute', recheck: true },
-  { t: "We've never dealt with your company. Why have we been sent this?", intent: 'dispute', recheck: true },
-  { t: 'We are not the company named on this invoice.', intent: 'dispute', recheck: true },
+  { t: 'We have never ordered anything from you, so we will not be paying this.', intent: 'dispute', cat: 'other', recheck: true },
+  { t: "We've never dealt with your company. Why have we been sent this?", intent: 'dispute', cat: 'other', recheck: true },
+  { t: 'We are not the company named on this invoice.', intent: 'dispute', cat: 'other', recheck: true },
   { t: 'Please speak to Priya in accounts payable, I only handle purchasing.', intent: 'wrong_contact', recheck: true },
   { t: "I've moved to a different role. Please send invoices to finance@brindley-test.example instead.", intent: 'wrong_contact', recheck: true },
   { t: 'Who is the best person to talk to about placing a new order?', intent: 'other', recheck: true },
   { t: 'Can someone ring me about our delivery schedule?', intent: 'other', recheck: true },
+  // Added 21 Nov 2026 for dispute reasons (--disputes): one clear case per reason.
+  { t: "Our purchasing team won't release payment without a PO number on the invoice.", intent: 'dispute', alt: ['needs_invoice_copy'], cat: 'missing_po' },
+  { t: "You've charged us twice for the same job. Please correct the invoice.", intent: 'dispute', cat: 'wrong_amount' },
+  { t: 'Nothing was ever delivered to our Leeds site, so we will not pay for it.', intent: 'dispute', cat: 'delivery_not_confirmed' },
+  { t: "The installation was never finished and two of the units still don't work.", intent: 'dispute', cat: 'work_incomplete' },
+  { t: 'We ordered 20 chairs, not 30. The invoice is for too many.', intent: 'dispute', cat: 'wrong_quantity' },
+  { t: "We can't pay until we have the signed timesheets for this job.", intent: 'dispute', alt: ['needs_invoice_copy'], cat: 'missing_paperwork' },
+  { t: 'Nobody here approved the extra work that is on this invoice.', intent: 'dispute', cat: 'unapproved_extra_work' },
+  { t: 'We have no record of ordering this. Who authorised it?', intent: 'dispute', cat: 'other' },
   // safety net only (plain code, no AI):
   { t: 'Please pass this to our solicitor.', safety: 'legal' },
   { t: 'We have gone into administration.', safety: 'bankruptcy' },
@@ -86,19 +96,22 @@ const QUIET = ['promise_to_pay', 'acknowledged'];   // readings that do not aler
 async function main() {
   const quick = process.argv.includes('--quick');
   const recheck = process.argv.includes('--recheck');
-  const cases = recheck
-    ? CASES.filter(c => c.recheck === true && c.safety === undefined)
-    : CASES.filter((c, i) => c.safety !== undefined || !quick || i % 3 === 0);
+  const disputes = process.argv.includes('--disputes');
+  const cases = disputes
+    ? CASES.filter(c => c.cat !== undefined)
+    : recheck
+      ? CASES.filter(c => c.recheck === true && c.safety === undefined)
+      : CASES.filter((c, i) => c.safety !== undefined || !quick || i % 3 === 0);
   const aiCases = cases.filter(c => c.safety === undefined);
   const model = modelList()[0];
-  console.log(`Model: ${model}. ${aiCases.length} AI cases + ${cases.length - aiCases.length} safety-net cases${recheck ? ' (recheck: only the cases tagged for the prompt fix)' : ''}.`);
+  console.log(`Model: ${model}. ${aiCases.length} AI cases + ${cases.length - aiCases.length} safety-net cases${recheck ? ' (recheck: only the cases tagged for the prompt fix)' : ''}${disputes ? ' (disputes: also checks the dispute reason)' : ''}.`);
   if (GAP_MS > 0) console.log(`About ${Math.ceil(aiCases.length * (GAP_MS / 1000 + 3) / 60)} minutes (waiting between cases for Groq's free limit).\n`);
 
   const cfg = getConfig();
   const customer = { id: 'eval', name: 'Brindley Construction Ltd', contact_name: 'Sam' };
   const invoice = { id: 'eval-inv', invoice_number: 'INV-5003', currency: 'GBP', status: 'open', amount_cents: 125000, amount_paid_cents: 0, due_date: '2026-11-03' };
 
-  const out = { ok: 0, total: 0, intentOk: 0, intentTotal: 0, dateOk: 0, dateTotal: 0, safetyOk: 0, safetyTotal: 0, aiFailed: 0, wrong: [], quiet: [], confidentWrong: 0, confRight: [], confWrong: [] };
+  const out = { ok: 0, total: 0, intentOk: 0, intentTotal: 0, dateOk: 0, dateTotal: 0, catOk: 0, catTotal: 0, safetyOk: 0, safetyTotal: 0, aiFailed: 0, wrong: [], quiet: [], confidentWrong: 0, confRight: [], confWrong: [] };
   let first = true;
   for (const c of cases) {
     out.total++;
@@ -121,16 +134,19 @@ async function main() {
     if (intentOk) out.intentOk++;
     let dateOk = true;
     if (c.date !== undefined && c.date !== 'any') { out.dateTotal++; dateOk = r.promised_date === c.date; if (dateOk) out.dateOk++; }
-    const ok = intentOk && dateOk && !falseAlarm;
+    let catOk = true;
+    if (c.cat !== undefined && r.intent === 'dispute') { out.catTotal++; catOk = r.dispute_category === c.cat || (c.catAlt || []).includes(r.dispute_category); if (catOk) out.catOk++; }
+    const ok = intentOk && dateOk && catOk && !falseAlarm;
     if (ok) { out.ok++; out.confRight.push(r.confidence); } else {
       out.confWrong.push(r.confidence);
       const why = !intentOk ? `read as ${r.intent}, should be ${c.intent}${c.alt ? ' (or ' + c.alt.join(' / ') + ')' : ''}`
-        : !dateOk ? `date ${r.promised_date}, should be ${c.date}` : `the safety net fired by mistake (${falseAlarm})`;
+        : !dateOk ? `date ${r.promised_date}, should be ${c.date}`
+        : !catOk ? `dispute reason ${r.dispute_category}, should be ${c.cat}${c.catAlt ? ' (or ' + c.catAlt.join(' / ') + ')' : ''}` : `the safety net fired by mistake (${falseAlarm})`;
       out.wrong.push({ t: c.t, why: `${why}; ${Math.round(r.confidence * 100)}% sure. AI summary: ${r.summary}` });
       if (!intentOk && QUIET.includes(r.intent) && !QUIET.includes(c.intent) && r.confidence >= cfg.minConfidence) out.quiet.push({ t: c.t, got: r.intent });
       if (r.confidence >= cfg.minConfidence) out.confidentWrong++;
     }
-    console.log(`${ok ? '✓' : '✗'} ${r.intent.padEnd(20)} ${String(Math.round(r.confidence * 100)).padStart(3)}%  ${c.t}`);
+    console.log(`${ok ? '✓' : '✗'} ${r.intent.padEnd(20)} ${String(Math.round(r.confidence * 100)).padStart(3)}%  ${r.dispute_category ? `[${r.dispute_category}] ` : ''}${c.t}`);
   }
 
   const pct = (a, b) => (b ? `${Math.round((a / b) * 100)}%` : 'n/a');
@@ -140,6 +156,7 @@ async function main() {
   console.log(`Intent right (AI):    ${out.intentOk} of ${out.intentTotal} (${pct(out.intentOk, out.intentTotal)})`);
   console.log(`Dates right (AI):     ${out.dateOk} of ${out.dateTotal} (${pct(out.dateOk, out.dateTotal)})`);
   console.log(`Safety net right:     ${out.safetyOk} of ${out.safetyTotal}`);
+  if (out.catTotal) console.log(`Dispute reason right: ${out.catOk} of ${out.catTotal} (${pct(out.catOk, out.catTotal)})`);
   console.log(`AI calls that failed: ${out.aiFailed}`);
   console.log(`Average sureness:     ${avg(out.confRight)} when right, ${avg(out.confWrong)} when wrong`);
   console.log(`Wrong but "sure" (>= ${Math.round(cfg.minConfidence * 100)}%): ${out.confidentWrong}`);

@@ -48,6 +48,7 @@ async function processInbound(msg) {
     await save({ kind: 'bounce', body_text: String(msg.text || '').slice(0, 1000), customer_id: hit[0] ? hit[0].id : null, action_taken: hit.length ? 'marked_bounced' : 'unmatched_bounce' });
     return { kind: 'bounce', customers: hit.length };
   }
+
   if (channel === 'email' && isAutoReply({ subject: msg.subject, headers: msg.headers || {}, from })) {
     await save({ kind: 'auto_reply', body_text: String(msg.text || '').slice(0, 500), action_taken: 'ignored' });
     return { kind: 'auto_reply' };
@@ -56,6 +57,7 @@ async function processInbound(msg) {
   // 2) who is this, and what did they actually write?
   const text = channel === 'sms' ? String(msg.text || '').trim() : stripQuoted(msg.text) || String(msg.text || '').slice(0, 1500);
   const m = await matchInbound({ channel, fromEmail: from, fromPhone: msg.fromPhone, toAddresses: msg.to || [], subject: msg.subject, body: text });
+
   if (!m.customer) {
     await save({ kind: 'unmatched', body_text: text.slice(0, 2000), needs_human: true, action_taken: cfg.alertUnmatched ? 'owner_alerted' : 'ignored' });
     if (cfg.alertUnmatched) await alertOwner({ level: 'action', key: `unmatched:${messageId}`, headline: `A reply from ${from || msg.fromPhone || 'someone'} doesn't match any customer`, lines: [`Subject: ${msg.subject || '(none)'}`, '', text.slice(0, 800)] });
@@ -73,13 +75,16 @@ async function processInbound(msg) {
     must(await supabase.from('invoices').update(p.patch).eq('id', p.invoiceId));
     await logEvent({ invoiceId: p.invoiceId, customerId: m.customer.id, type: p.event.type, details: { ...p.event.details, from_reply: true } });
   }
+
   if (d.customerPatch) must(await supabase.from('customers').update(d.customerPatch).eq('id', m.customer.id));
 
   // 4) the fixed acknowledgement (at most one per customer per 24h, so two auto-responders can never loop)
   let ackNote = null;
+
   if (d.ack && channel === 'email') {
     const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
     const recent = must(await supabase.from('outbound_messages').select('id').eq('customer_id', m.customer.id).eq('kind', 'ack').gte('created_at', since).limit(1));
+
     if (recent.length) ackNote = 'ack_suppressed';
     else {
       const ack = renderAck({ kind: d.ack.kind, customer: m.customer, invoices: targets, date: d.ack.date, cfg, today });
@@ -90,12 +95,24 @@ async function processInbound(msg) {
       });
       ackNote = r.ok ? 'ack_sent' : 'ack_failed';
     }
+
     if (ackNote !== 'ack_sent' && !d.alert && !cfg.dryRun) d.alert = { level: 'action', key: 'ack_problem', headline: `${m.customer.name} replied and no acknowledgement went out (${ackNote})`, actions: [] };
   }
 
   // 5) tell the owner when a human is needed
   if (d.alert) {
-    await alertOwner({ level: d.alert.level, key: `${d.alert.key}:${messageId}`, headline: d.alert.headline, lines: ownerLines({ customer: m.customer, targets, cfg, cls, text }), actions: d.alert.actions, invoice: targets[0], customer: m.customer });
+    await alertOwner({
+      level: d.alert.level,
+      key: `${d.alert.key}:${messageId}`,
+      lines: [
+        ...ownerLines({ customer: m.customer, targets, cfg, cls, text }),
+        ...(d.alert.extraLines || [])
+      ],
+      headline: d.alert.headline,
+      actions: d.alert.actions,
+      invoice: targets[0],
+      customer: m.customer
+    });
   }
 
   await save({
@@ -103,6 +120,7 @@ async function processInbound(msg) {
     intent: cls.intent, confidence: cls.confidence, ai_result: cls, needs_human: !!(d.alert && d.alert.level !== 'info'),
     action_taken: [d.label, ackNote].filter(Boolean).join(' + ')
   });
+
   return { kind: 'reply', customer: m.customer.name, intent: cls.intent, confidence: cls.confidence, action: d.label, ack: ackNote, alerted: !!d.alert };
 }
 
