@@ -84,6 +84,13 @@ async function runChase({ force = false, dryRun } = {}) {
     }
   }
 
+    // 2b) dispute tasks that have waited too long: nudge YOU again (never emails a customer)
+  if (!cfg.dryRun) {
+    const { nudgeDisputeTasks } = require('./nudges');
+    const nudge = await nudgeDisputeTasks({ cfg, nowISO }).catch(e => { console.error('dispute nudges failed:', e.message); return null; });
+    if (nudge) result.nudged = nudge.nudged;
+  }
+
   // 3) tell the owner what happened, so a mistake (e.g. a paid invoice still being chased) is caught the same day
   if (!cfg.dryRun && result.sent > 0 && cfg.notifyOnSend) {
     await alertOwner({ level: 'info', key: `sent:${nowISO}`, headline: `Sent ${result.sent} payment reminder${result.sent === 1 ? '' : 's'}`, lines: sentSummary })

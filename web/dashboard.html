@@ -46,6 +46,7 @@
   .row{padding:14px 0;border-bottom:1px solid var(--rule)}
   .row .top{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
   .quote{color:var(--muted);margin:4px 0 0;max-width:80ch}
+  details{margin:8px 0 0;max-width:80ch} summary{cursor:pointer;color:var(--link)} details ol{margin:6px 0 0 20px;padding:0}
   .filters{display:flex;gap:10px;margin:16px 0 4px}.filters input{max-width:260px}.filters select{max-width:200px}
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px 18px;max-width:640px}
   .grid2 label{font-size:13px;color:var(--muted)} .full{grid-column:1/-1}
@@ -136,15 +137,16 @@ function render() {
   const promised = m.promisedNext7.reduce((s, x) => s + x.cents, 0);
   $('#subline').textContent = `Collected in the last 7 days: ${money(m.collected.week.cents)}. ` + (m.avgDaysToPay !== null ? `Customers take ${m.avgDaysToPay} days to pay on average. ` : '') + (promised ? `${money(promised)} is promised for the next 7 days.` : '');
 
-  const tabs = [['attention', `Needs you (${D.attention.length})`], ['invoices', `Invoices (${D.invoices.length})`], ['replies', 'Replies'], ['activity', 'Activity'], ['add', 'Add invoices']];
+  const tabs = [['attention', `Needs you (${D.attention.length})`], ['disputes', `Disputes (${(D.disputes || []).length})`], ['invoices', `Invoices (${D.invoices.length})`], ['replies', 'Replies'], ['activity', 'Activity'], ['add', 'Add invoices']];
   $('#tabs').innerHTML = tabs.map(([k, t]) => `<a data-tab="${k}" class="${tab === k ? 'on' : ''}" tabindex="0" role="button">${esc(t)}</a>`).join('');
-  $('#view').innerHTML = ({ attention: viewAttention, invoices: viewInvoices, replies: viewReplies, activity: viewActivity, add: viewAdd })[tab]();
+  $('#view').innerHTML = ({ attention: viewAttention, disputes: viewDisputes, invoices: viewInvoices, replies: viewReplies, activity: viewActivity, add: viewAdd })[tab]();
 }
 
 const btn = (act, id, text, extra = '') => `<button data-act="${act}" data-id="${esc(id)}" ${extra}>${esc(text)}</button>`;
 function buttonsFor(i) {
   const paid = btn('mark_paid', i.id, 'Paid');
   if (i.status === 'open') return paid + btn('snooze', i.id, 'Snooze') + btn('set_promise', i.id, 'Promise date') + btn('stop', i.id, 'Stop');
+  if (i.status === 'disputed') return btn('evidence_sent', i.id, 'Evidence sent') + btn('resume', i.id, 'Resolved, resume') + btn('credit_note_needed', i.id, 'Credit note needed') + paid + btn('void', i.id, 'Void');
   if (i.status === 'escalated') return paid + btn('resume', i.id, 'Resume') + btn('snooze', i.id, 'Snooze') + btn('void', i.id, 'Void');
   return paid + btn('resume', i.id, 'Resume') + btn('void', i.id, 'Void');
 }
@@ -158,6 +160,16 @@ function viewAttention() {
     return `<div class="row"><div class="top"><div><strong>${esc(a.customer)}</strong> · ${esc(a.invoice)} · ${money(a.cents)}${a.late > 0 ? ` · <span class="late">${a.late} days late</span>` : ''}</div><div>${esc(REASON[a.reason])}</div></div>
     ${a.note ? `<p class="quote">${esc(a.note)}</p>` : ''}<div style="margin-top:8px">${inv ? buttonsFor(inv) : ''}${extra}</div></div>`;
   }).join('');
+}
+
+function viewDisputes() {
+  const list = D.disputes || [];
+  if (!list.length) return '<div class="empty">No open disputes. When a customer disputes an invoice, it shows up here with what to collect and what to do next.</div>';
+  const STATUS = { open: 'Needs you', waiting_on_customer: 'Waiting for the customer', credit_note_needed: 'Credit note needed' };
+  return list.map(d => `<div class="row"><div class="top"><div><strong>${esc(d.customer)}</strong> · ${esc(d.invoice)} · ${money(d.cents)}</div><div>${esc(d.reason)}</div></div>
+    <p class="quote">${esc(STATUS[d.status] || label(d.status))} · open ${d.ageDays} day${d.ageDays === 1 ? '' : 's'}${d.assignee ? ' · for ' + esc(d.assignee) : ''}${d.note ? ' · ' + esc(d.note) : ''}</p>
+    ${d.collect && d.collect.length ? `<details><summary>What to collect</summary><ol>${d.collect.map(c => `<li>${esc(c)}</li>`).join('')}</ol></details>` : ''}
+    <div style="margin-top:8px">${btn('evidence_sent', d.invoiceId, 'Evidence sent')}${btn('resume', d.invoiceId, 'Resolved, resume chasing')}${btn('credit_note_needed', d.invoiceId, 'Credit note needed')}${btn('mark_paid', d.invoiceId, 'Paid')}${btn('void', d.invoiceId, 'Void')}</div></div>`).join('');
 }
 
 function viewInvoices() {

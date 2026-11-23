@@ -1,11 +1,14 @@
 // The Monday-morning cash report: one email that answers "where is my money?".
 const { supabase, must, fetchAll } = require('./db');
 const { getConfig } = require('./config');
-const { todayISO, mondayOf, formatDate } = require('./dates');
+const { todayISO, mondayOf, formatDate, daysBetween } = require('./dates');
 const { formatMoney } = require('./money');
 const { OPEN, BUCKETS, computeMetrics, attentionList } = require('./metrics');
 const { sendOwnerEmail } = require('./outbound');
 const { esc } = require('./util');
+const { labelOf } = require('./disputes');
+
+const OPEN_TASKS = ['open', 'waiting_on_customer', 'credit_note_needed'];
 
 async function loadData(cfg, now = new Date()) {
   const today = todayISO(cfg.business.timezone, now);
@@ -13,25 +16,48 @@ async function loadData(cfg, now = new Date()) {
   const paid = await fetchAll(() => supabase.from('invoices').select('*, customers(name)').eq('status', 'paid')
     .gte('paid_at', new Date(now.getTime() - 100 * 86400000).toISOString()).order('paid_at').order('id'));
   const weekAgo = new Date(now.getTime() - 7 * 86400000).toISOString();
-  const events = await fetchAll(() => supabase.from('events').select('type').gte('created_at', weekAgo).order('created_at').order('id'));
+  const events = await fetchAll(() => supabase.from('events').select('type, details').gte('created_at', weekAgo).order('created_at').order('id'));
   const count = t => events.filter(e => e.type === t).length;
   const replies = await supabase.from('inbound_messages').select('id', { count: 'exact', head: true }).eq('kind', 'reply').gte('created_at', weekAgo);
+
+  // Disputes: what is open now, and what was new this week by reason. If the tasks table is not there yet, this stays empty.
+  const disputes = { open: [], newByReason: {} };
+  for (const e of events.filter(x => x.type === 'disputed')) {
+    const label = labelOf(e.details && e.details.category);
+    disputes.newByReason[label] = (disputes.newByReason[label] || 0) + 1;
+  }
+  const tasks = await supabase.from('tasks').select('category, status, created_at, invoices(invoice_number), customers(name)').in('status', OPEN_TASKS).order('created_at');
+  if (!tasks.error) {
+    disputes.open = (tasks.data || []).map(t => ({
+      customer: (t.customers && t.customers.name) || 'Unknown', invoice: t.invoices && t.invoices.invoice_number, reason: labelOf(t.category), status: t.status,
+      ageDays: Math.max(0, daysBetween(todayISO(cfg.business.timezone, new Date(t.created_at)), today))
+    }));
+  }
   return {
-    today, open, paid,
+    today, open, paid, disputes,
     stats: { reminders: count('reminder_sent'), replies: replies.count || 0, promises: count('promise_recorded'), broken: count('promise_broken'), paid: count('mark_paid') }
   };
 }
 
 const COLORS = ['#5f9b7a', '#c9a23a', '#d98a2b', '#c4572f', '#9e2f2f'];
 const REASON = { disputed: 'Disputed', escalated: 'Needs a personal call', payment_claimed: 'Says they paid — verify', on_hold: 'On hold', no_contact: 'Can’t be contacted' };
+const TASK_STATUS = { open: 'needs you', waiting_on_customer: 'waiting for the customer', credit_note_needed: 'credit note needed' };
 
-function buildReport({ today, open, paid, stats, cfg }) {
+function buildReport({ today, open, paid, stats, disputes = { open: [], newByReason: {} }, cfg }) {
   const m = computeMetrics({ invoices: [...open, ...paid], today, cfg });
   const attention = attentionList(open, today);
   const $ = c => formatMoney(c, m.currency, cfg.business.locale);
   const dash = cfg.appDomain ? `https://${cfg.appDomain}/dashboard.html` : '';
   const total = m.outstanding.cents || 1;
   const subject = `Cash report: ${$(m.outstanding.cents)} outstanding, ${$(m.overdue.cents)} overdue, ${$(m.collected.week.cents)} collected this week`;
+
+  // disputes, as plain lines (used by both the text and the HTML version)
+  const newReasons = Object.entries(disputes.newByReason).sort((a, b) => b[1] - a[1]).map(([k, n]) => `${k} ${n}`);
+  const oldest = disputes.open.reduce((mx, d) => Math.max(mx, d.ageDays), 0);
+  const disputeHead = disputes.open.length ? `${disputes.open.length} open (oldest ${oldest} days)` : 'No open disputes.';
+  const disputeRows = [...disputes.open].sort((a, b) => b.ageDays - a.ageDays).slice(0, 8)
+    .map(d => `${d.customer}, ${d.invoice}: ${d.reason}, ${d.ageDays} days (${TASK_STATUS[d.status] || d.status})`);
+  const disputeNew = newReasons.length ? `New this week: ${newReasons.join(', ')}` : '';
 
   // ---- plain text ----
   const t = [`Cash report — ${cfg.business.name} — ${formatDate(today, cfg.business.locale)}`, '',
@@ -47,6 +73,9 @@ function buildReport({ today, open, paid, stats, cfg }) {
   t.push('', 'Needs you');
   attention.slice(0, 15).forEach(a => t.push(`  ${REASON[a.reason]}: ${a.customer}, ${a.invoice}, ${$(a.cents)}${a.note ? ` — ${a.note}` : ''}`));
   if (!attention.length) t.push('  Nothing — the automation has it covered.');
+  t.push('', 'Disputes', `  ${disputeHead}`);
+  disputeRows.forEach(r => t.push(`  ${r}`));
+  if (disputeNew) t.push(`  ${disputeNew}`);
   t.push('', 'Biggest overdue balances');
   m.topOverdue.forEach(c => t.push(`  ${c.customer}: ${$(c.cents)} (${c.count} invoice${c.count === 1 ? '' : 's'}, oldest ${c.oldest} days late)`));
   t.push('', `Chaser this week: ${stats.reminders} reminders sent, ${stats.replies} replies read, ${stats.promises} promises recorded, ${stats.broken} promises broken, ${stats.paid} invoices marked paid.`);
@@ -77,6 +106,10 @@ ${h2('Expected in the next 7 days')}
 ${list([...m.promisedNext7.map(x => `<strong>Promised ${esc(formatDate(x.date, cfg.business.locale))}</strong> — ${esc(x.customer)}, ${esc(x.invoice)}, ${esc($(x.cents))}`), ...m.dueNext7.map(x => `Due ${esc(formatDate(x.date, cfg.business.locale))} — ${esc(x.customer)}, ${esc(x.invoice)}, ${esc($(x.cents))}`)], 'Nothing scheduled.')}
 ${h2('Needs you')}
 ${list(attention.slice(0, 15).map(a => `<strong>${esc(REASON[a.reason])}</strong> — ${esc(a.customer)}, ${esc(a.invoice)}, ${esc($(a.cents))}${a.note ? `<br><span style="color:#5b6b64">${esc(a.note)}</span>` : ''}`), 'Nothing — the automation has it covered.')}
+${h2('Disputes')}
+<div style="${td}"><strong>${esc(disputeHead)}</strong></div>
+${list(disputeRows.map(r => esc(r)), '')}
+${disputeNew ? `<div style="${td};color:#5b6b64">${esc(disputeNew)}</div>` : ''}
 ${h2('Biggest overdue balances')}
 ${list(m.topOverdue.map(c => `${esc(c.customer)} — <strong>${esc($(c.cents))}</strong> (${c.count} invoice${c.count === 1 ? '' : 's'}, oldest ${c.oldest} days late)`), 'Nothing overdue.')}
 <p style="font-size:13px;color:#5b6b64;margin:22px 0 0">This week the chaser sent ${stats.reminders} reminders, read ${stats.replies} replies, recorded ${stats.promises} promises (${stats.broken} broken) and saw ${stats.paid} invoices marked paid.${m.otherCurrencyInvoices ? ` ${m.otherCurrencyInvoices} open invoices in other currencies are not included in the totals.` : ''}</p>

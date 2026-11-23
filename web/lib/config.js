@@ -63,6 +63,7 @@ function getConfig(env = process.env) {
     promiseGraceDays: num(env.PROMISE_GRACE_DAYS, 2),   // days after a promised date before chasing resumes
     maxPromiseDays: num(env.MAX_PROMISE_DAYS, 60),      // a promise further out than this is not believed
     maxPromises: num(env.MAX_PROMISES, 2),              // after this many broken promises, a human takes over
+    disputeTaskDays: num(env.DISPUTE_TASK_DAYS, 5),
     decisionHoldDays: num(env.DECISION_HOLD_DAYS, 7),   // pause while you decide on an extension/plan request
     minConfidence: num(env.MIN_CONFIDENCE, 0.6),        // below this the AI's reading is not acted on
     autoAck: bool(env.AUTO_ACK, true),                  // send the fixed "thanks, noted" replies
