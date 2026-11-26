@@ -35,12 +35,14 @@ async function performAction({ action, invoiceId = null, customerId = null, para
 
   // ---- invoice-level actions ----
   const inv = must(await supabase.from('invoices').select('*').eq('id', invoiceId).maybeSingle());
+  if (!inv) throw new Error('Invoice not found');
   if (['paid', 'void'].includes(inv.status) && !['mark_paid', 'void'].includes(action)) throw new Error(`This invoice is already ${inv.status}`);
   let patch, type = action;
 
   switch (action) {
     case 'mark_paid':
-      patch = { status: 'paid', paid_at: params.paid_at || nowISO, amount_paid_cents: inv.amount_cents, status_note: null, paused_until: null };
+      // Cash paid = the total minus any credit notes. Credit notes are not cash, so they never count as money collected.
+      patch = { status: 'paid', paid_at: params.paid_at || nowISO, amount_paid_cents: Math.max(0, Number(inv.amount_cents) - Number(inv.amount_credited_cents || 0)), status_note: null, paused_until: null };
       break;
     case 'resume':
       patch = { status: 'open', paused_until: null, status_note: null };
@@ -65,9 +67,11 @@ async function performAction({ action, invoiceId = null, customerId = null, para
     case 'partial_payment': {
       const cents = toCents(params.amount);
       if (!cents || cents <= 0) throw new Error('A payment amount is required');
-      const paid = Math.min(inv.amount_cents, Number(inv.amount_paid_cents) + cents);
-      patch = paid >= inv.amount_cents ? { status: 'paid', paid_at: nowISO, amount_paid_cents: paid, status_note: null } : { amount_paid_cents: paid };
-      type = paid >= inv.amount_cents ? 'mark_paid' : 'partial_payment';
+      const owed = Math.max(0, Number(inv.amount_cents) - Number(inv.amount_credited_cents || 0));   // the most cash that can still come in
+      const paid = Math.min(owed, Number(inv.amount_paid_cents) + cents);
+      const closes = paid >= owed;
+      patch = closes ? { status: 'paid', paid_at: nowISO, amount_paid_cents: paid, status_note: null } : { amount_paid_cents: paid };
+      type = closes ? 'mark_paid' : 'partial_payment';
       break;
     }
     // The two dispute notes. The invoice stays "disputed", so chasing stays paused until you decide.

@@ -49,10 +49,13 @@ function computeMetrics({ invoices, today, cfg }) {
   const weekFrom = addDays(today, -6), monthFrom = addDays(today, -29), ninetyFrom = addDays(today, -90);
   const toPay = [], daysLate = [];
   for (const i of paid) {
+    // "Collected" is CASH only. An invoice that was closed by a credit note alone has no cash, so it adds
+    // nothing to "collected" or to "average days to pay". (A part-credited invoice counts just its cash part.)
+    const cash = Number(i.amount_paid_cents) || 0;
+    if (cash <= 0) continue;
     const paidISO = todayISO(tz, new Date(i.paid_at));
-    const cents = Number(i.amount_paid_cents) || Number(i.amount_cents);
-    if (paidISO >= weekFrom) { m.collected.week.cents += cents; m.collected.week.count++; }
-    if (paidISO >= monthFrom) { m.collected.month.cents += cents; m.collected.month.count++; }
+    if (paidISO >= weekFrom) { m.collected.week.cents += cash; m.collected.week.count++; }
+    if (paidISO >= monthFrom) { m.collected.month.cents += cash; m.collected.month.count++; }
     if (paidISO >= ninetyFrom) {
       if (i.issue_date) toPay.push(daysBetween(i.issue_date, paidISO));
       daysLate.push(Math.max(0, daysBetween(i.due_date, paidISO)));

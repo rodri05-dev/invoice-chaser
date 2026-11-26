@@ -25,7 +25,7 @@ async function nudgeDisputeTasks({ cfg, nowISO = new Date().toISOString() }) {
   let rows;
   try {
     rows = must(await supabase.from('tasks')
-      .select('id, invoice_id, customer_id, category, status, note, created_at, updated_at, last_alert_at, invoices(id, invoice_number, status, amount_cents, amount_paid_cents, currency), customers(name)')
+      .select('id, invoice_id, customer_id, category, status, note, created_at, updated_at, last_alert_at, invoices(id, invoice_number, status, amount_cents, amount_paid_cents, amount_credited_cents, currency) customers(name)')
       .in('status', OPEN));
   } catch (e) { console.warn('nudges: could not read the tasks:', e.message); return { nudged: 0, closed: 0 }; }
 

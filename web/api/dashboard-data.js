@@ -28,7 +28,7 @@ module.exports = async (req, res) => {
       supabase.from('events').select('type, details, created_at, invoices(invoice_number), customers(name)').order('created_at', { ascending: false }).limit(60),
       supabase.from('jobs').select('job, last_run_at, last_ok, last_summary'),
       usageSummary(),                                 // today's AI tokens; null if the ai_usage table is missing
-      supabase.from('tasks').select('id, invoice_id, customer_id, category, status, assignee_email, note, due_date, created_at, invoices(invoice_number, amount_cents, amount_paid_cents, currency), customers(name)')
+      supabase.from('tasks').select('id, invoice_id, customer_id, category, status, assignee_email, note, due_date, created_at, invoices(invoice_number, amount_cents, amount_paid_cents, amount_credited_cents, currency)s, currency), customers(name)')
         .in('status', OPEN_TASKS).order('created_at')          // {data:null} if the tasks table is not there yet: the tab just stays empty
     ]);
 

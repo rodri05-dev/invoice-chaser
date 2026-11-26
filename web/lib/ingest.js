@@ -27,6 +27,9 @@ async function upsertInvoice(raw, source = 'api') {
   const amountCents = has(raw, 'amount_cents') ? Number(raw.amount_cents) : toCents(raw.amount);
   const paidProvided = has(raw, 'amount_paid_cents', 'amount_paid');
   const paidCents = has(raw, 'amount_paid_cents') ? Number(raw.amount_paid_cents) : (toCents(raw.amount_paid) || 0);
+  // Credit notes are kept apart from cash: they lower what is owed, but they are never "money collected".
+  const creditedProvided = has(raw, 'amount_credited_cents', 'amount_credited');
+  const creditedCents = has(raw, 'amount_credited_cents') ? Number(raw.amount_credited_cents) : (toCents(raw.amount_credited) || 0);
   const status = String(raw.status || '').toLowerCase().trim();
 
   const problems = [];
@@ -34,10 +37,12 @@ async function upsertInvoice(raw, source = 'api') {
   if (!name) problems.push('customer_name or customer_email is missing');
   if (!dueDate) problems.push('due_date is missing or unreadable');
   if (amountCents === null || !Number.isFinite(amountCents) || amountCents < 0) problems.push('amount is missing or invalid');
+  if (creditedProvided && (!Number.isFinite(creditedCents) || creditedCents < 0)) problems.push('amount_credited is invalid');
   if (problems.length) return { ok: false, error: problems.join('; ') };
 
   const incomingVoid = /^(void(ed)?|cancel(l)?ed|deleted|draft|written.?off)$/.test(status);
-  const incomingPaid = /^(paid|closed|settled|complete(d)?)$/.test(status) || (amountCents > 0 && paidProvided && paidCents >= amountCents);
+  const incomingPaid = /^(paid|closed|settled|complete(d)?)$/.test(status)
+    || (amountCents > 0 && (paidProvided || creditedProvided) && paidCents + creditedCents >= amountCents);   // paid + credited covers the whole invoice
 
   let customer = await findCustomer({ email, name });
   const existing = customer
@@ -63,7 +68,8 @@ async function upsertInvoice(raw, source = 'api') {
     const invoice = must(await supabase.from('invoices').insert(clean({
       customer_id: customer.id, invoice_number: invoiceNumber, source,
       currency: String(raw.currency || cfg.business.currency).toUpperCase(),
-      amount_cents: amountCents, amount_paid_cents: paidCents, issue_date: issueDate, due_date: dueDate,
+      amount_cents: amountCents, amount_paid_cents: paidCents, amount_credited_cents: creditedProvided ? creditedCents : undefined,
+      issue_date: issueDate, due_date: dueDate,
       invoice_url: raw.invoice_url || raw.invoiceUrl, po_number: raw.po_number || raw.poNumber, description: raw.description
     })).select().single());
     await logEvent({ invoiceId: invoice.id, customerId: customer.id, type: 'invoice_created', details: { source } });
@@ -72,6 +78,11 @@ async function upsertInvoice(raw, source = 'api') {
 
   if (incomingPaid) {
     if (['paid', 'void'].includes(existing.status)) return { ok: true, action: 'ignored', invoice: existing };
+    // Save the credit first, so "mark paid" counts only the cash part (total minus credit) as money collected.
+    if (creditedProvided) {
+      must(await supabase.from('invoices').update({ amount_credited_cents: creditedCents }).eq('id', existing.id));
+      if (creditedCents > Number(existing.amount_credited_cents || 0)) await logEvent({ invoiceId: existing.id, customerId: customer.id, type: 'credit_applied', details: { credited_cents: creditedCents, actor: 'sync' } });
+    }
     const invoice = await performAction({ action: 'mark_paid', invoiceId: existing.id, params: { paid_at: raw.paid_at }, actor: 'sync' });
     return { ok: true, action: 'paid', invoice };
   }
@@ -84,13 +95,17 @@ async function upsertInvoice(raw, source = 'api') {
 
   // Still open: refresh the fields the accounting tool owns. Chasing state (status, reminders, promises) is left alone.
   const patch = clean({
-    amount_cents: amountCents, amount_paid_cents: paidProvided ? paidCents : undefined, due_date: dueDate, issue_date: issueDate,
+    amount_cents: amountCents, amount_paid_cents: paidProvided ? paidCents : undefined, amount_credited_cents: creditedProvided ? creditedCents : undefined,
+    due_date: dueDate, issue_date: issueDate,
     invoice_url: raw.invoice_url || raw.invoiceUrl, po_number: raw.po_number || raw.poNumber, description: raw.description,
     currency: raw.currency ? String(raw.currency).toUpperCase() : undefined
   });
   const invoice = must(await supabase.from('invoices').update(patch).eq('id', existing.id).select().single());
   if (paidProvided && paidCents > Number(existing.amount_paid_cents)) {
     await logEvent({ invoiceId: existing.id, customerId: customer.id, type: 'partial_payment', details: { paid_cents: paidCents, actor: 'sync' } });
+  }
+  if (creditedProvided && creditedCents > Number(existing.amount_credited_cents || 0)) {
+    await logEvent({ invoiceId: existing.id, customerId: customer.id, type: 'credit_applied', details: { credited_cents: creditedCents, actor: 'sync' } });
   }
   return { ok: true, action: 'updated', invoice };
 }

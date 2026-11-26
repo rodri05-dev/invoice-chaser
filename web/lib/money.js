@@ -14,7 +14,8 @@ function toCents(input) {
 const formatMoney = (cents, currency = 'USD', locale = 'en-US') =>
   new Intl.NumberFormat(locale, { style: 'currency', currency }).format((Number(cents) || 0) / 100);
 
-// What the customer still owes on an invoice.
-const balanceCents = inv => Math.max(0, Number(inv.amount_cents || 0) - Number(inv.amount_paid_cents || 0));
+// What the customer still owes on an invoice: the total, minus cash paid, minus credit notes.
+// Credit notes are NOT cash: they lower what is owed, but they are never counted as money collected.
+const balanceCents = inv => Math.max(0, Number(inv.amount_cents || 0) - Number(inv.amount_paid_cents || 0) - Number(inv.amount_credited_cents || 0));
 
 module.exports = { toCents, formatMoney, balanceCents };
