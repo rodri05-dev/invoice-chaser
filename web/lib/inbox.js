@@ -1,16 +1,30 @@
-const { fetchUnread, markSeen } = require('./gmail');
+const mail = require('./mail');
 const { processInbound } = require('./inbound');
 const { alertOwner } = require('./notify');
+const { getConfig } = require('./config');
 
 async function pollInbox({ max = 15 } = {}) {
-  const msgs = await fetchUnread({ sinceDays: 5, max });
+  let msgs;
+  try {
+    msgs = await mail.fetchUnread({ sinceDays: 5, max });
+  } catch (e) {
+    if (e instanceof mail.MailAuthError) {            // the Outlook sign-in is gone: tell the owner once a day how to fix it
+      const domain = getConfig().appDomain;
+      await alertOwner({
+        level: 'urgent', key: 'mail_reconnect', dedupeHours: 24, headline: 'Your email connection needs to be reconnected',
+        lines: ['The system cannot read replies or send reminders until you sign in to Microsoft again.', `Open https://${domain || 'your-app-address'}/api/mail/connect?secret=YOUR_CRON_CHECK_SECRET in your browser and sign in with the same mailbox.`, `Why it stopped: ${e.message}`]
+      }).catch(err => console.error('could not send the reconnect alert:', err.message));
+    }
+    throw e;
+  }
   const seen = [], results = [];
   for (const m of msgs) {
     if (m.tooLarge) { seen.push(m.uid); continue; }
     try {
       results.push(await processInbound({
         channel: 'email', messageId: m.messageId, from: m.from, to: m.to, subject: m.subject, text: m.text,
-        receivedAt: m.date, headers: m.headers, references: m.references
+        receivedAt: m.date, headers: m.headers, references: m.references,
+        conversationId: m.conversationId, graphMessageId: m.graphMessageId, inReplyTo: m.inReplyTo
       }));
     } catch (e) {
       console.error('processInbound failed:', e);
@@ -19,7 +33,7 @@ async function pollInbox({ max = 15 } = {}) {
     }
     seen.push(m.uid);                // always mark read, so one bad email can never loop forever
   }
-  await markSeen(seen);
+  await mail.markSeen(seen);
   return {
     fetched: msgs.length,
     replies: results.filter(r => r.kind === 'reply').length,

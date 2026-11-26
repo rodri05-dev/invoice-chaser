@@ -9,8 +9,9 @@ const { decide } = require('./policy');
 const { renderAck } = require('./templates');
 const { sendCustomerEmail } = require('./outbound');
 const { alertOwner } = require('./notify');
-const { openDisputeTask } = require('./tasks');
 const { formatMoney, balanceCents } = require('./money');
+const { openDisputeTask } = require('./tasks');
+const mail = require('./mail');
 
 function ownerLines({ customer, targets, cfg, cls, text }) {
   const inv = targets.map(t => `${t.invoice_number} (${formatMoney(balanceCents(t), t.currency || cfg.business.currency, cfg.business.locale)}, due ${t.due_date})`).join('; ');
@@ -20,7 +21,8 @@ function ownerLines({ customer, targets, cfg, cls, text }) {
   return lines;
 }
 
-// msg: { channel, messageId, from: {address,name}, fromPhone, to: [], subject, text, receivedAt, headers, references }
+// msg: { channel, messageId, from: {address,name}, fromPhone, to: [], subject, text, receivedAt, headers, references,
+//        conversationId, graphMessageId, inReplyTo }   (the last three only come from Microsoft mail)
 async function processInbound(msg) {
   const cfg = getConfig();
   const channel = msg.channel || 'email';
@@ -28,13 +30,16 @@ async function processInbound(msg) {
   const today = todayISO(cfg.business.timezone);
   const from = String((msg.from && msg.from.address) || '').toLowerCase();
   const messageId = msg.messageId || `gen-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const own = String(process.env.GMAIL_ADDRESS || '').toLowerCase();
+  const own = channel === 'email' ? String(await mail.mailboxAddress().catch(() => '') || '').toLowerCase() : '';
 
-  if (channel === 'email' && from && from === own && !tokenFrom(msg.to || [])) return { skipped: 'own_message' };   // our own mail landing in the inbox
+  if (channel === 'email' && from && from === own && !tokenFrom(msg.to || [], own)) return { skipped: 'own_message' };   // our own mail landing in the inbox
 
   if (must(await supabase.from('inbound_messages').select('id').eq('message_id', messageId).maybeSingle())) return { duplicate: true };
 
-  const base = { channel, message_id: messageId, from_address: from || msg.fromPhone || null, from_name: (msg.from && msg.from.name) || null, subject: msg.subject || null, received_at: msg.receivedAt || nowISO };
+  const base = {
+    channel, message_id: messageId, from_address: from || msg.fromPhone || null, from_name: (msg.from && msg.from.name) || null, subject: msg.subject || null, received_at: msg.receivedAt || nowISO,
+    ...(msg.graphMessageId ? { graph_message_id: msg.graphMessageId } : {})
+  };
   const save = async extra => must(await supabase.from('inbound_messages').insert({ ...base, ...extra }));
 
   // 1) delivery failures and out-of-office replies are not replies
@@ -57,7 +62,10 @@ async function processInbound(msg) {
 
   // 2) who is this, and what did they actually write?
   const text = channel === 'sms' ? String(msg.text || '').trim() : stripQuoted(msg.text) || String(msg.text || '').slice(0, 1500);
-  const m = await matchInbound({ channel, fromEmail: from, fromPhone: msg.fromPhone, toAddresses: msg.to || [], subject: msg.subject, body: text });
+  const m = await matchInbound({
+    channel, fromEmail: from, fromPhone: msg.fromPhone, toAddresses: msg.to || [], subject: msg.subject, body: text,
+    conversationId: msg.conversationId, inReplyTo: msg.inReplyTo, references: msg.references || [], mailbox: own
+  });
 
   if (!m.customer) {
     await save({ kind: 'unmatched', body_text: text.slice(0, 2000), needs_human: true, action_taken: cfg.alertUnmatched ? 'owner_alerted' : 'ignored' });
@@ -77,7 +85,7 @@ async function processInbound(msg) {
     await logEvent({ invoiceId: p.invoiceId, customerId: m.customer.id, type: p.event.type, details: { ...p.event.details, from_reply: true } });
   }
 
-    if (d.customerPatch) must(await supabase.from('customers').update(d.customerPatch).eq('id', m.customer.id));
+  if (d.customerPatch) must(await supabase.from('customers').update(d.customerPatch).eq('id', m.customer.id));
   if (d.task) for (const t of targets) await openDisputeTask({ invoice: t, customer: m.customer, category: d.task.category, note: d.task.note, cfg, today });
 
   // 4) the fixed acknowledgement (at most one per customer per 24h, so two auto-responders can never loop)
@@ -93,7 +101,8 @@ async function processInbound(msg) {
       const r = await sendCustomerEmail({
         cfg, customer: m.customer, to: from || m.customer.email, kind: 'ack', invoiceIds: targets.map(t => t.id),
         subject: `Re: ${cleanSubject(msg.subject) || 'your invoice'}`, text: ack.text, html: ack.html,
-        inReplyTo: msg.messageId, references: [...(msg.references || []), msg.messageId].filter(Boolean)
+        inReplyTo: msg.messageId, references: [...(msg.references || []), msg.messageId].filter(Boolean),
+        replyToGraphId: msg.graphMessageId
       });
       ackNote = r.ok ? 'ack_sent' : 'ack_failed';
     }

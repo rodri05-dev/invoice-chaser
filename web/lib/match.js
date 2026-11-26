@@ -1,6 +1,6 @@
 // Which customer (and which invoices) is this reply about? Tried in order of trustworthiness:
-//   1. the secret token in the Reply-To plus-address   2. the sender is a known billing address
-//   3. same company domain                              4. an invoice number written in the message
+//   1. the secret token in the Reply-To plus-address   2. the email thread (we sent the message it replies to)
+//   3. the sender is a known billing address            4. same company domain      5. an invoice number written in the message
 const { supabase, must, fetchAll } = require('./db');
 const { escapeRegExp } = require('./util');
 
@@ -12,9 +12,10 @@ const sameOrg = (a, b) => { const x = domainOf(a).toLowerCase(), y = domainOf(b)
 const knownSender = (from, c) => [c.email, ...(c.extra_emails || [])].filter(Boolean).some(e => e === from || sameOrg(e, from));
 const mentions = (text, num) => String(num).length >= 3 && new RegExp(`(^|[^A-Za-z0-9])${escapeRegExp(num)}([^A-Za-z0-9]|$)`, 'i').test(text);
 
-// you+a1b2c3d4e5@gmail.com -> "a1b2c3d4e5", but only for OUR mailbox
-function tokenFrom(addresses) {
-  const [local, domain] = String(process.env.GMAIL_ADDRESS || '').toLowerCase().split('@');
+// you+a1b2c3d4e5@gmail.com -> "a1b2c3d4e5", but only for OUR mailbox. `mailbox` is the connected mailbox address
+// (when omitted, the Gmail address from the settings is used, as before).
+function tokenFrom(addresses, mailbox) {
+  const [local, domain] = String(mailbox !== undefined ? mailbox : process.env.GMAIL_ADDRESS || '').toLowerCase().split('@');
   for (const a of addresses) {
     const m = String(a).match(/^([^+@]+)\+([a-z0-9]{6,16})@(.+)$/i);
     if (m && m[1].toLowerCase() === local && m[3].toLowerCase() === domain) return m[2].toLowerCase();
@@ -28,18 +29,36 @@ async function customersByInvoiceNumber(text, onlyIds = null) {
   return [...ids];
 }
 
-async function matchInbound({ channel = 'email', fromEmail = '', fromPhone = '', toAddresses = [], subject = '', body = '' }) {
+// A reply to one of OUR emails: its thread id (Microsoft) or the message ids it answers (any provider) point back to a
+// reminder or acknowledgement we sent. Only counts when they all point to ONE customer.
+async function customerByThread({ conversationId, inReplyTo, references = [] }) {
+  const seen = new Set();
+  const look = async (column, values) => {
+    if (!values.length) return;
+    const rows = must(await supabase.from('outbound_messages').select('customer_id').in(column, values).in('kind', ['reminder', 'ack']).order('created_at', { ascending: false }).limit(10));
+    rows.forEach(r => r.customer_id && seen.add(r.customer_id));
+  };
+  await look('conversation_id', conversationId ? [conversationId] : []);
+  await look('message_id', [...new Set([inReplyTo, ...references].filter(Boolean))]);
+  if (seen.size !== 1) return null;
+  return must(await supabase.from('customers').select('*').eq('id', [...seen][0]).maybeSingle());
+}
+
+async function matchInbound({ channel = 'email', fromEmail = '', fromPhone = '', toAddresses = [], subject = '', body = '', conversationId = null, inReplyTo = null, references = [], mailbox } = {}) {
   if (channel === 'sms') {
     const c = fromPhone ? must(await supabase.from('customers').select('*').eq('phone', fromPhone).limit(1))[0] : null;
     return c ? { customer: c, method: 'phone', senderKnown: true } : { customer: null };
   }
   const from = String(fromEmail).toLowerCase();
 
-  const token = tokenFrom(toAddresses);
+  const token = tokenFrom(toAddresses, mailbox);
   if (token) {
     const c = must(await supabase.from('customers').select('*').eq('reply_token', token).limit(1))[0];
     if (c) return { customer: c, method: 'token', senderKnown: true };
   }
+
+  const thread = await customerByThread({ conversationId, inReplyTo, references });
+  if (thread) return { customer: thread, method: 'thread', senderKnown: true };
 
   if (from) {
     const direct = must(await supabase.from('customers').select('*').eq('email', from));

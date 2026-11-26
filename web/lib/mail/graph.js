@@ -97,9 +97,11 @@ async function sendMail({ to, cc, subject, text, html, replyTo }) {
 }
 
 // A reply inside the same thread (Graph does not let us set In-Reply-To by hand, so we use its reply call).
-async function sendReply({ graphMessageId, text, html }) {
+async function sendReply({ graphMessageId, to, text, html }) {
   const draft = await graph(`/me/messages/${encodeURIComponent(graphMessageId)}/createReply`, { method: 'POST' });
-  await graph(`/me/messages/${encodeURIComponent(draft.id)}`, { method: 'PATCH', body: { body: bodyOf(text, html) } });
+  // Graph pre-fills the recipient with the person who wrote. We set it ourselves (and clear Cc) so the one outbound
+  // door, with its test override, decides where every message goes.
+  await graph(`/me/messages/${encodeURIComponent(draft.id)}`, { method: 'PATCH', body: { body: bodyOf(text, html), ...(to ? { toRecipients: recipients(to), ccRecipients: [] } : {}) } });
   await graph(`/me/messages/${encodeURIComponent(draft.id)}/send`, { method: 'POST' });
   return { messageId: draft.internetMessageId || null, graphMessageId: draft.id, conversationId: draft.conversationId || null };
 }
