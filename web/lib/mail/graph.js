@@ -9,6 +9,8 @@ const GRAPH = 'https://graph.microsoft.com/v1.0';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 let fetchImpl = (...a) => fetch(...a);            // the tests swap this for a fake
 const setFetch = f => { fetchImpl = f; };
+let sleepImpl = sleep;                            // the tests swap this so they do not really wait
+const setSleep = f => { sleepImpl = f; };
 
 async function loadAccount() {
   const row = must(await supabase.from('mail_accounts').select('*').eq('provider', 'graph').limit(1))[0];
@@ -87,22 +89,41 @@ function parseAddress(s) {
 }
 const bodyOf = (text, html) => ({ contentType: html ? 'HTML' : 'Text', content: html || text || '' });
 
+// Sends a draft. A throttled send (429) did not go out, so it is safe to wait and try again.
+// Any other failure is NOT retried: the mail may or may not have left, and a second send could reach the customer twice.
+async function sendDraft(id) {
+  for (let attempt = 0; ; attempt++) {
+    try { await graph(`/me/messages/${encodeURIComponent(id)}/send`, { method: 'POST' }); return; }
+    catch (e) {
+      if (attempt >= 2 || e instanceof MailAuthError || !/^Microsoft Graph 429/.test(e.message)) throw e;
+      await sleepImpl(2000 * (attempt + 1));
+    }
+  }
+}
+
+// If sending failed, take the unsent draft out of Outlook, so nothing is left lying in the Drafts folder.
+async function dropDraft(id) {
+  try { await graph(`/me/messages/${encodeURIComponent(id)}`, { method: 'DELETE' }); } catch { /* best effort: the original error is what matters */ }
+}
+
 // Creates a draft and sends it, so we learn the message's ids (needed to match the customer's reply later).
 async function sendMail({ to, cc, subject, text, html, replyTo }) {
   const draft = await graph('/me/messages', { method: 'POST', body: {
     subject, body: bodyOf(text, html), toRecipients: recipients(to), ccRecipients: recipients(cc), ...(replyTo ? { replyTo: [parseAddress(replyTo)] } : {})
   } });
-  await graph(`/me/messages/${encodeURIComponent(draft.id)}/send`, { method: 'POST' });
+  try { await sendDraft(draft.id); } catch (e) { await dropDraft(draft.id); throw e; }
   return { messageId: draft.internetMessageId || null, graphMessageId: draft.id, conversationId: draft.conversationId || null };
 }
 
 // A reply inside the same thread (Graph does not let us set In-Reply-To by hand, so we use its reply call).
 async function sendReply({ graphMessageId, to, text, html }) {
   const draft = await graph(`/me/messages/${encodeURIComponent(graphMessageId)}/createReply`, { method: 'POST' });
-  // Graph pre-fills the recipient with the person who wrote. We set it ourselves (and clear Cc) so the one outbound
-  // door, with its test override, decides where every message goes.
-  await graph(`/me/messages/${encodeURIComponent(draft.id)}`, { method: 'PATCH', body: { body: bodyOf(text, html), ...(to ? { toRecipients: recipients(to), ccRecipients: [] } : {}) } });
-  await graph(`/me/messages/${encodeURIComponent(draft.id)}/send`, { method: 'POST' });
+  try {
+    // Graph pre-fills the recipient with the person who wrote. We set it ourselves (and clear Cc) so the one outbound
+    // door, with its test override, decides where every message goes.
+    await graph(`/me/messages/${encodeURIComponent(draft.id)}`, { method: 'PATCH', body: { body: bodyOf(text, html), ...(to ? { toRecipients: recipients(to), ccRecipients: [] } : {}) } });
+    await sendDraft(draft.id);
+  } catch (e) { await dropDraft(draft.id); throw e; }
   return { messageId: draft.internetMessageId || null, graphMessageId: draft.id, conversationId: draft.conversationId || null };
 }
 
@@ -139,4 +160,4 @@ async function markSeen(ids) {
 
 async function mailboxAddress() { return (await loadAccount()).address; }
 
-module.exports = { setFetch, sendMail, sendReply, fetchUnread, markSeen, mailboxAddress, loadAccount, shape };
+module.exports = { setFetch, setSleep, sendMail, sendReply, fetchUnread, markSeen, mailboxAddress, loadAccount, shape };

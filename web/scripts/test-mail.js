@@ -225,6 +225,50 @@ test('graph: a Microsoft server error is reported, not swallowed (the next run r
   await assert.rejects(() => G.fetchUnread(), /Graph 503/); eq(TABLES.mail_accounts[0].status, 'connected');
 });
 
+// ---------- a failed send must not leave a stray draft ----------
+const sends = () => CALLS.filter(c => c.method === 'POST' && c.url.endsWith('/send')).length;
+const deletes = () => CALLS.filter(c => c.method === 'DELETE').map(c => c.url.replace('https://graph.microsoft.com/v1.0', ''));
+const draftOk = id => graphOk((u, o) => o.method === 'POST' && u.endsWith('/me/messages'), { id, internetMessageId: '<d@x>', conversationId: 'cv' });
+const delOk = { match: (u, o) => o.method === 'DELETE', respond: () => reply(204) };
+test('graph: if the send fails, the unsent draft is removed from Outlook and the real error is reported', async () => {
+  seed(); G.setSleep(async () => {});
+  HANDLERS = [draftOk('D7'), delOk, { match: u => u.endsWith('/send'), respond: () => reply(403, { error: { message: 'not allowed to send' } }) }];
+  await assert.rejects(() => G.sendMail({ to: 'a@b.com', subject: 's', text: 't' }), /Graph 403: not allowed to send/);
+  eq([sends(), deletes()], [1, ['/me/messages/D7']]);                                  // one try only, then the draft is deleted
+});
+test('graph: a throttled send (429) waits and tries again, and is delivered once', async () => {
+  seed(); const waits = []; G.setSleep(async ms => { waits.push(ms); });
+  let n = 0;
+  HANDLERS = [draftOk('D8'), delOk, { match: u => u.endsWith('/send'), respond: () => (++n < 3 ? reply(429, { error: { message: 'slow down' } }) : reply(202)) }];
+  const r = await G.sendMail({ to: 'a@b.com', subject: 's', text: 't' });
+  eq([r.graphMessageId, sends(), deletes(), waits], ['D8', 3, [], [2000, 4000]]);
+});
+test('graph: a send that keeps being throttled gives up after 3 tries and removes the draft', async () => {
+  seed(); G.setSleep(async () => {});
+  HANDLERS = [draftOk('D9'), delOk, { match: u => u.endsWith('/send'), respond: () => reply(429, { error: { message: 'slow down' } }) }];
+  await assert.rejects(() => G.sendMail({ to: 'a@b.com', subject: 's', text: 't' }), /Graph 429/);
+  eq([sends(), deletes()], [3, ['/me/messages/D9']]);
+});
+test('graph: a server error (5xx) on send is never retried, because a second send could reach the customer twice', async () => {
+  seed(); G.setSleep(async () => {});
+  HANDLERS = [draftOk('D10'), delOk, { match: u => u.endsWith('/send'), respond: () => reply(503, { error: { message: 'busy' } }) }];
+  await assert.rejects(() => G.sendMail({ to: 'a@b.com', subject: 's', text: 't' }), /Graph 503/);
+  eq([sends(), deletes()], [1, ['/me/messages/D10']]);
+});
+test('graph: if removing the draft also fails, the original error still comes through', async () => {
+  seed(); G.setSleep(async () => {});
+  HANDLERS = [draftOk('D11'), { match: (u, o) => o.method === 'DELETE', respond: () => reply(500, { error: { message: 'cannot delete' } }) }, { match: u => u.endsWith('/send'), respond: () => reply(403, { error: { message: 'blocked' } }) }];
+  await assert.rejects(() => G.sendMail({ to: 'a@b.com', subject: 's', text: 't' }), /Graph 403: blocked/);
+});
+test('graph: a reply that fails to send also removes its draft; a good reply leaves nothing behind', async () => {
+  seed(); G.setSleep(async () => {});
+  const base = [graphOk(u => u.endsWith('/createReply'), { id: 'R5', conversationId: 'c' }), { match: (u, o) => o.method === 'PATCH', respond: () => reply(200, {}) }, delOk];
+  HANDLERS = [...base, { match: u => u.endsWith('/send'), respond: () => reply(403, { error: { message: 'no' } }) }];
+  await assert.rejects(() => G.sendReply({ graphMessageId: 'M1', text: 't' }), /Graph 403/); eq(deletes(), ['/me/messages/R5']);
+  seed(); HANDLERS = [...base, { match: u => u.endsWith('/send'), respond: () => reply(202) }];
+  await G.sendReply({ graphMessageId: 'M1', text: 't' }); eq(deletes(), []);
+});
+
 // ---------- the test page can never email a customer ----------
 test('route: the test email only goes to the connected mailbox or the owner', async () => {
   seed(); HANDLERS = [graphOk(u => u.endsWith('/me/messages'), { id: 'D1', internetMessageId: '<m@x>', conversationId: 'c1' }), { match: u => u.endsWith('/send'), respond: () => reply(202) }, graphOk(u => u.includes('/mailFolders/inbox'), { value: [] })];
