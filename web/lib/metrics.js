@@ -1,6 +1,7 @@
 // Every number on the dashboard and in the weekly report comes from here. Pure functions: rows in, numbers out.
 const { daysBetween, addDays, todayISO } = require('./dates');
 const { balanceCents } = require('./money');
+const { interestRollup } = require('./lateinterest');
 
 const OPEN = ['open', 'promised', 'payment_claimed', 'disputed', 'on_hold', 'escalated'];
 const BUCKETS = [['current', 'Not yet due'], ['d1_30', '1–30 days late'], ['d31_60', '31–60 days late'], ['d61_90', '61–90 days late'], ['d90plus', 'Over 90 days late']];
@@ -20,7 +21,8 @@ function computeMetrics({ invoices, today, cfg }) {
     outstanding: { cents: 0, count: 0 }, overdue: { cents: 0, count: 0 }, newlyOverdue: { cents: 0, count: 0 },
     aging: Object.fromEntries(BUCKETS.map(([k, label]) => [k, { label, cents: 0, count: 0 }])),
     byStatus: {}, collected: { week: { cents: 0, count: 0 }, month: { cents: 0, count: 0 } },
-    avgDaysToPay: null, avgDaysLate: null, promisedNext7: [], dueNext7: [], topOverdue: []
+    avgDaysToPay: null, avgDaysLate: null, promisedNext7: [], dueNext7: [], topOverdue: [],
+    interest: null                                      // late-payment interest estimate; null while STATUTORY_INTEREST_MODE is off
   };
 
   const byCustomer = new Map();
@@ -63,6 +65,7 @@ function computeMetrics({ invoices, today, cfg }) {
   }
   m.avgDaysToPay = avg(toPay);
   m.avgDaysLate = avg(daysLate);
+  if (cfg.interest && cfg.interest.mode !== 'off') m.interest = interestRollup(openCur, { today, cfg });
   return m;
 }
 

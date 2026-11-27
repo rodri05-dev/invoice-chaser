@@ -5,6 +5,7 @@ const { todayISO, mondayOf, formatDate, daysBetween } = require('./dates');
 const { formatMoney } = require('./money');
 const { OPEN, BUCKETS, computeMetrics, attentionList } = require('./metrics');
 const { sendOwnerEmail } = require('./outbound');
+const { alertOwner } = require('./notify');
 const { esc } = require('./util');
 const { labelOf } = require('./disputes');
 
@@ -12,7 +13,7 @@ const OPEN_TASKS = ['open', 'waiting_on_customer', 'credit_note_needed'];
 
 async function loadData(cfg, now = new Date()) {
   const today = todayISO(cfg.business.timezone, now);
-  const open = await fetchAll(() => supabase.from('invoices').select('*, customers(name, email, do_not_contact, email_bounced)').in('status', OPEN).order('due_date').order('id'));
+  const open = await fetchAll(() => supabase.from('invoices').select('*, customers(*)').in('status', OPEN).order('due_date').order('id'));
   const paid = await fetchAll(() => supabase.from('invoices').select('*, customers(name)').eq('status', 'paid')
     .gte('paid_at', new Date(now.getTime() - 100 * 86400000).toISOString()).order('paid_at').order('id'));
   const weekAgo = new Date(now.getTime() - 7 * 86400000).toISOString();
@@ -59,6 +60,14 @@ function buildReport({ today, open, paid, stats, disputes = { open: [], newByRea
     .map(d => `${d.customer}, ${d.invoice}: ${d.reason}, ${d.ageDays} days (${TASK_STATUS[d.status] || d.status})`);
   const disputeNew = newReasons.length ? `New this week: ${newReasons.join(', ')}` : '';
 
+  // late-payment interest: an estimate for YOU only. Nothing is ever added to an invoice or sent to a customer automatically.
+  const ix = m.interest;
+  const interestLines = !ix ? [] : [
+    ix.count ? `You could claim about ${$(ix.interestCents)} interest plus ${$(ix.compensationCents)} fixed recovery costs on ${ix.count} late invoice${ix.count === 1 ? '' : 's'} (estimate; nothing is added to any invoice automatically).` : 'No late-payment interest to claim right now.',
+    ...(ix.byHand ? [`${ix.byHand} part-paid or credited invoice${ix.byHand === 1 ? '' : 's'} must be calculated by hand.`] : []),
+    ...(ix.missing.length ? [`Add the Bank of England base rate for ${ix.missing.join(' and ')} to BASE_RATES_JSON in Vercel, to include more invoices.`] : [])
+  ];
+
   // ---- plain text ----
   const t = [`Cash report — ${cfg.business.name} — ${formatDate(today, cfg.business.locale)}`, '',
     `Outstanding: ${$(m.outstanding.cents)} across ${m.outstanding.count} invoices`,
@@ -78,6 +87,7 @@ function buildReport({ today, open, paid, stats, disputes = { open: [], newByRea
   if (disputeNew) t.push(`  ${disputeNew}`);
   t.push('', 'Biggest overdue balances');
   m.topOverdue.forEach(c => t.push(`  ${c.customer}: ${$(c.cents)} (${c.count} invoice${c.count === 1 ? '' : 's'}, oldest ${c.oldest} days late)`));
+  if (interestLines.length) t.push('', 'Late-payment interest', ...interestLines.map(l => `  ${l}`));
   t.push('', `Chaser this week: ${stats.reminders} reminders sent, ${stats.replies} replies read, ${stats.promises} promises recorded, ${stats.broken} promises broken, ${stats.paid} invoices marked paid.`);
   if (m.otherCurrencyInvoices) t.push(`(${m.otherCurrencyInvoices} open invoices in other currencies are not included in these totals.)`);
   if (dash) t.push('', `Dashboard: ${dash}`);
@@ -112,6 +122,7 @@ ${list(disputeRows.map(r => esc(r)), '')}
 ${disputeNew ? `<div style="${td};color:#5b6b64">${esc(disputeNew)}</div>` : ''}
 ${h2('Biggest overdue balances')}
 ${list(m.topOverdue.map(c => `${esc(c.customer)} — <strong>${esc($(c.cents))}</strong> (${c.count} invoice${c.count === 1 ? '' : 's'}, oldest ${c.oldest} days late)`), 'Nothing overdue.')}
+${interestLines.length ? h2('Late-payment interest') + list(interestLines.map(l => esc(l)), '') : ''}
 <p style="font-size:13px;color:#5b6b64;margin:22px 0 0">This week the chaser sent ${stats.reminders} reminders, read ${stats.replies} replies, recorded ${stats.promises} promises (${stats.broken} broken) and saw ${stats.paid} invoices marked paid.${m.otherCurrencyInvoices ? ` ${m.otherCurrencyInvoices} open invoices in other currencies are not included in the totals.` : ''}</p>
 ${dash ? `<p style="margin:14px 0 0"><a href="${esc(dash)}" style="color:#1f5f8b">Open the dashboard</a></p>` : ''}
 </div>`;
@@ -123,6 +134,13 @@ async function sendWeeklyReport({ force = false, preview = false } = {}) {
   const data = await loadData(cfg);
   const report = buildReport({ ...data, cfg });
   if (preview) return { preview: true, ...report };
+  const ix = report.metrics.interest;
+  if (ix && ix.missing.length) {                     // a new half-year began and no base rate is set for it yet
+    await alertOwner({
+      level: 'action', key: `base_rate_missing:${ix.missing.join(',')}`, dedupeHours: 24 * 6, headline: 'Add the new Bank of England base rate',
+      lines: [`Late-payment interest cannot be worked out for some invoices, because no base rate is set for ${ix.missing.join(' and ')}.`, `In Vercel, Settings, Environment Variables, edit BASE_RATES_JSON and add that date with the Bank of England base rate on that day, for example "${ix.missing[0]}": 4.00. Then redeploy.`]
+    }).catch(e => console.error(e.message));
+  }
   if (!force) {
     const monday = mondayOf(data.today);
     const done = must(await supabase.from('outbound_messages').select('id').eq('kind', 'report').eq('status', 'sent').gte('created_at', `${monday}T00:00:00Z`).limit(1));

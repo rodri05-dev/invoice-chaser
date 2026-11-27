@@ -29,8 +29,32 @@ function loadSequence(raw) {
   }
 }
 
+// UK late-payment interest. STATUTORY_INTEREST_MODE: off (default: nothing changes anywhere) | owner (estimates on the
+// dashboard and in the weekly report, for YOU only) | mention (owner, plus one fixed sentence in the firm and final reminders).
+// BASE_RATES_JSON = the Bank of England base rate on each reference date, kept by you, e.g. {"2025-12-31":3.75,"2026-06-30":3.75}.
+const INTEREST_MODES = ['off', 'owner', 'mention'];
+function loadBaseRates(raw) {
+  if (!raw || !String(raw).trim()) return {};
+  try {
+    const obj = JSON.parse(raw);
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) throw new Error('needs an object like {"2026-06-30": 3.75}');
+    const out = {};
+    for (const [k, v] of Object.entries(obj)) {
+      if (!/^\d{4}-(06-30|12-31)$/.test(k)) throw new Error(`"${k}" is not a reference date (use YYYY-06-30 or YYYY-12-31)`);
+      const n = Number(v);
+      if (v === null || v === '' || !Number.isFinite(n) || n < 0 || n > 25) throw new Error(`the rate for ${k} must be a number like 3.75`);
+      out[k] = n;
+    }
+    return out;
+  } catch (e) {
+    console.warn('BASE_RATES_JSON ignored:', e.message);
+    return {};
+  }
+}
+
 function getConfig(env = process.env) {
   const name = env.BUSINESS_NAME || 'Our Company';
+  const interestMode = String(env.STATUTORY_INTEREST_MODE || 'off').trim().toLowerCase();
   return {
     // SAFETY: anything that would email a customer is only logged until you set DRY_RUN=false.
     dryRun: bool(env.DRY_RUN, true),
@@ -70,6 +94,7 @@ function getConfig(env = process.env) {
     notifyOnPromise: bool(env.NOTIFY_ON_PROMISE, false),
     notifyOnSend: bool(env.NOTIFY_ON_SEND, true),       // one summary email whenever a run sends reminders
     alertUnmatched: bool(env.ALERT_UNMATCHED, true),
+    interest: { mode: INTEREST_MODES.includes(interestMode) ? interestMode : 'off', baseRates: loadBaseRates(env.BASE_RATES_JSON) },
     sms: { enabled: bool(env.SMS_ENABLED, false) }
   };
 }

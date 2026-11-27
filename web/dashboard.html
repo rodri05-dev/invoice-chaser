@@ -172,16 +172,25 @@ function viewDisputes() {
     <div style="margin-top:8px">${btn('evidence_sent', d.invoiceId, 'Evidence sent')}${btn('resume', d.invoiceId, 'Resolved, resume chasing')}${btn('credit_note_needed', d.invoiceId, 'Credit note needed')}${btn('mark_paid', d.invoiceId, 'Paid')}${btn('void', d.invoiceId, 'Void')}</div></div>`).join('');
 }
 
+// What you could claim in late-payment interest on one invoice (an estimate, shown only while the setting is on).
+function interestCell(x) {
+  if (!x) return '';
+  if (x.state === 'ok') return money(x.interestCents) + (x.compensationCents ? `<div class="muted">+ ${money(x.compensationCents)} costs</div>` : '');
+  if (x.state === 'by_hand') return '<span class="muted">by hand</span>';
+  if (x.state === 'rate_missing') return '<span class="warn">rate missing</span>';
+  return '';
+}
+
 function viewInvoices() {
   const q = filter.q.toLowerCase();
   const rows = D.invoices.filter(i => (filter.status === 'all' || i.status === filter.status) && (!q || `${i.number} ${i.customer} ${i.email}`.toLowerCase().includes(q)));
   const statuses = ['all', 'open', 'promised', 'payment_claimed', 'disputed', 'on_hold', 'escalated'];
   return `<div class="filters"><input id="q" placeholder="Search customer or invoice" value="${esc(filter.q)}" aria-label="Search"><select id="st" aria-label="Status">${statuses.map(s => `<option value="${s}" ${filter.status === s ? 'selected' : ''}>${s === 'all' ? 'Every status' : label(s)}</option>`).join('')}</select></div>
-  <table><thead><tr><th>Customer</th><th>Invoice</th><th class="r">Balance</th><th class="r">Late</th><th>Status</th><th class="hide-s">Reminders</th><th></th></tr></thead><tbody>
+  <table><thead><tr><th>Customer</th><th>Invoice</th><th class="r">Balance</th><th class="r">Late</th><th>Status</th><th class="hide-s">Reminders</th>${D.interestOn ? '<th class="r hide-s">Interest you could claim</th>' : ''}<th></th></tr></thead><tbody>
   ${rows.map(i => `<tr><td>${esc(i.customer)}<div class="muted">${esc(i.email || '')}</div></td><td>${i.url ? `<a href="${esc(i.url)}" target="_blank" rel="noopener">${esc(i.number)}</a>` : esc(i.number)}</td><td class="r">${money(i.cents)}</td>
   <td class="r ${i.late > 0 ? 'late' : 'muted'}">${i.late > 0 ? i.late + ' d' : 'due ' + esc(i.due)}</td>
   <td><span class="dot" style="background:${STATUS_COLOR[i.status] || 'var(--muted)'}"></span>${esc(label(i.status))}${i.promised && i.status === 'promised' ? `<div class="muted">by ${esc(i.promised)}</div>` : ''}${i.note ? `<div class="muted">${esc(i.note)}</div>` : ''}</td>
-  <td class="hide-s">${i.reminders}${i.lastReminder ? `<div class="muted">${ago(i.lastReminder)}</div>` : ''}</td><td>${buttonsFor(i)}</td></tr>`).join('') || '<tr><td colspan="7" class="empty">No invoices match.</td></tr>'}
+  <td class="hide-s">${i.reminders}${i.lastReminder ? `<div class="muted">${ago(i.lastReminder)}</div>` : ''}</td>${D.interestOn ? `<td class="r hide-s">${interestCell(i.interest)}</td>` : ''}<td>${buttonsFor(i)}</td></tr>`).join('') || '<tr><td colspan="${D.interestOn ? 8 : 7}" class="empty">No invoices match.</td></tr>'}
   </tbody></table>`;
 }
 

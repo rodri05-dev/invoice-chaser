@@ -3,6 +3,7 @@ const { supabase } = require('../lib/db');
 const { getConfig } = require('../lib/config');
 const { daysBetween, todayISO } = require('../lib/dates');
 const { balanceCents } = require('../lib/money');
+const { interestForInvoice } = require('../lib/lateinterest');
 const { computeMetrics, attentionList } = require('../lib/metrics');
 const { loadData } = require('../lib/report');
 const { usageSummary } = require('../lib/aiusage');
@@ -20,7 +21,8 @@ module.exports = async (req, res) => {
     const invoices = open.map(i => ({
       id: i.id, customerId: i.customer_id, number: i.invoice_number, customer: i.customers && i.customers.name, email: i.customers && i.customers.email,
       status: i.status, note: i.status_note, cents: balanceCents(i), currency: i.currency, due: i.due_date, late: daysBetween(i.due_date, today),
-      reminders: i.reminder_count, lastReminder: i.last_reminder_at, promised: i.promised_date, url: i.invoice_url
+      reminders: i.reminder_count, lastReminder: i.last_reminder_at, promised: i.promised_date, url: i.invoice_url,
+      interest: interestForInvoice(i, { today, cfg })          // null while STATUTORY_INTEREST_MODE is off
     })).sort((a, b) => b.late - a.late).slice(0, 500);
 
     const [replies, events, jobs, ai, tasks] = await Promise.all([
@@ -28,7 +30,7 @@ module.exports = async (req, res) => {
       supabase.from('events').select('type, details, created_at, invoices(invoice_number), customers(name)').order('created_at', { ascending: false }).limit(60),
       supabase.from('jobs').select('job, last_run_at, last_ok, last_summary'),
       usageSummary(),                                 // today's AI tokens; null if the ai_usage table is missing
-      supabase.from('tasks').select('id, invoice_id, customer_id, category, status, assignee_email, note, due_date, created_at, invoices(invoice_number, amount_cents, amount_paid_cents, amount_credited_cents, currency)s, currency), customers(name)')
+      supabase.from('tasks').select('id, invoice_id, customer_id, category, status, assignee_email, note, due_date, created_at, invoices(invoice_number, amount_cents, amount_paid_cents, amount_credited_cents, currency), customers(name)')
         .in('status', OPEN_TASKS).order('created_at')          // {data:null} if the tasks table is not there yet: the tab just stays empty
     ]);
 
@@ -43,7 +45,7 @@ module.exports = async (req, res) => {
 
     res.status(200).json({
       business: cfg.business.name, currency: cfg.business.currency, locale: cfg.business.locale,
-      dryRun: cfg.dryRun, testOverride: !!cfg.testEmailOverride, today,
+      dryRun: cfg.dryRun, testOverride: !!cfg.testEmailOverride, today, interestOn: cfg.interest.mode !== 'off',
       metrics, attention, invoices, stats, ai, disputes,
       replies: replies.data || [], events: events.data || [], jobs: jobs.data || []
     });

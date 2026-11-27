@@ -44,6 +44,7 @@ const { computeMetrics } = require('../lib/metrics');
 const { stepFor } = require('../lib/sequence');
 const { performAction } = require('../lib/actions');
 const { upsertInvoice } = require('../lib/ingest');
+const { csvToInvoices } = require('../lib/csv');
 
 const cfg = getConfig({ BUSINESS_TIMEZONE: 'Europe/London', BUSINESS_LOCALE: 'en-GB', DEFAULT_CURRENCY: 'GBP' });
 const TODAY = '2026-09-30';
@@ -158,6 +159,25 @@ test('intake: a closed invoice is never re-opened by a credit update, and a bad 
   fresh([inv({ status: 'paid', amount_paid_cents: 100000 })]);
   const r = await upsertInvoice(raw({ amount_credited: 100 }), 'api'); eq([r.action, row('i1').status, row('i1').amount_credited_cents], ['ignored', 'paid', 0]);
   fresh([inv()]); const bad = await upsertInvoice(raw({ amount_credited: -5 }), 'api'); eq(bad.ok, false); assert(/amount_credited/.test(bad.error));
+});
+
+// ---------- CSV files ----------
+test('csv: a credit column is read, and a Balance column no longer turns a credit note into cash', () => {
+  const a = csvToInvoices('Invoice,Customer,Email,Total,Credited,Balance,Due\nINV-1,Brindley Ltd,ap@brindley-test.example,1000,300,700,2026-09-10').rows[0];
+  eq([a.amount_cents, a.amount_credited_cents, a.amount_paid_cents], [100000, 30000, 0]);
+  const b = csvToInvoices('Invoice,Customer,Email,Total,Credit Note,Balance Due,Due\nINV-1,Brindley Ltd,ap@brindley-test.example,1000,300,400,2026-09-10').rows[0];
+  eq([b.amount_credited_cents, b.amount_paid_cents], [30000, 30000]);                      // 1000 - 300 credit - 400 left = 300 cash
+});
+test('csv: a sheet without a credit column works exactly as before', () => {
+  const a = csvToInvoices('Invoice,Customer,Email,Total,Balance Due,Due\nINV-1,Brindley Ltd,ap@brindley-test.example,1000,400,2026-09-10').rows[0];
+  eq([a.amount_paid_cents, 'amount_credited_cents' in a], [60000, false]);
+  eq(csvToInvoices('Invoice,Customer,Total,Due\nA1,Zed,100,2026-09-01').rows[0].amount_paid_cents, undefined);
+});
+test('csv: an invoice that the sheet shows as fully credited closes with no cash collected', async () => {
+  fresh([inv()]);
+  const row0 = csvToInvoices('Invoice,Customer,Email,Total,Credited,Balance,Due\nINV-1,Brindley Ltd,ap@brindley-test.example,1000,1000,0,2026-09-10').rows[0];
+  const r = await upsertInvoice({ ...row0, invoice_number: 'INV-1' }, 'csv');
+  eq([r.action, row('i1').status, row('i1').amount_paid_cents, row('i1').amount_credited_cents], ['paid', 'paid', 0, 100000]);
 });
 
 (async () => {

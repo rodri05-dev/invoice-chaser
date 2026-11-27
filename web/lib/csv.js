@@ -42,6 +42,7 @@ const ALIASES = {
   amount: ['amount', 'total', 'invoiceamount', 'invoicetotal', 'grandtotal'],
   balance: ['balance', 'balancedue', 'amountdue', 'outstanding', 'open', 'remaining'],
   amount_paid: ['paid', 'amountpaid', 'paidtodate', 'payments'],
+  amount_credited: ['credited', 'amountcredited', 'credit', 'credits', 'creditnote', 'creditnotes', 'creditapplied', 'creditsapplied'],
   currency: ['currency', 'curr'],
   issue_date: ['date', 'invoicedate', 'issuedate', 'issued', 'created'],
   due_date: ['due', 'duedate', 'datedue', 'paymentdue'],
@@ -69,13 +70,16 @@ function csvToInvoices(text) {
     const o = {};
     cols.forEach((f, i) => { if (f) o[f] = String(cells[i] || '').trim(); });
     const rec = { ...o };
-    delete rec.amount; delete rec.balance; delete rec.amount_paid;
-    const amount = toCents(o.amount), balance = toCents(o.balance), paid = toCents(o.amount_paid);
+    delete rec.amount; delete rec.balance; delete rec.amount_paid; delete rec.amount_credited;
+    const amount = toCents(o.amount), balance = toCents(o.balance), paid = toCents(o.amount_paid), credited = toCents(o.amount_credited);
     // Only send a "paid so far" figure when the sheet actually has one, so re-importing a
     // sheet without that column can't wipe out partial payments already recorded.
     if (amount !== null) {
       rec.amount_cents = amount;
-      if (balance !== null) rec.amount_paid_cents = Math.max(0, amount - balance);
+      // Credit notes are kept apart from cash. A "Balance" column is what is LEFT: total minus cash minus credit notes,
+      // so the cash paid is whatever remains after taking the balance AND the credit off the total.
+      if (credited !== null) rec.amount_credited_cents = credited;
+      if (balance !== null) rec.amount_paid_cents = Math.max(0, amount - balance - (credited || 0));
       else if (paid !== null) rec.amount_paid_cents = paid;
     } else if (balance !== null) { rec.amount_cents = balance; rec.amount_paid_cents = 0; }
     if (!rec.invoice_number && !rec.customer_name && !rec.customer_email) return;   // blank line

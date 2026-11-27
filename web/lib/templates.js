@@ -6,6 +6,11 @@ const { esc } = require('./util');
 
 const greeting = c => (c.contact_name && c.contact_name.trim() ? `Hi ${c.contact_name.trim().split(/\s+/)[0]},` : 'Hello,');
 
+// One fixed sentence, only when STATUTORY_INTEREST_MODE=mention, only in the firm and final reminders, and never for a
+// customer who has their own contract interest rate. It states a right; it does not name an amount. Have a professional read it.
+const INTEREST_NOTE = 'Please note that we may claim statutory interest and a fixed recovery cost on late-paid business invoices under the Late Payment of Commercial Debts (Interest) Act 1998.';
+const hasContractRate = c => !!c && c.contract_interest_pct !== null && c.contract_interest_pct !== undefined && c.contract_interest_pct !== '';
+
 function rowsOf(invoices, cfg, today) {
   return invoices.map(i => ({
     number: i.invoice_number,
@@ -70,14 +75,15 @@ function renderReminder({ tone, customer, invoices, cfg, today }) {
   const c = COPY[tone] || COPY.follow_up;
   const pay = cfg.business.paymentInstructions ? `How to pay:\n${cfg.business.paymentInstructions}` : '';
   const fee = (tone === 'firm' || tone === 'final') && cfg.business.lateFeeNote ? cfg.business.lateFeeNote : '';
+  const interestNote = (tone === 'firm' || tone === 'final') && cfg.interest && cfg.interest.mode === 'mention' && !hasContractRate(customer) ? INTEREST_NOTE : '';
 
   const subject = c.subject(ctx);
   const text = [
     greeting(customer), '', c.intro(ctx), '', tableText(r),
-    ...(pay ? ['', pay] : []), ...(fee ? ['', fee] : []),
+    ...(pay ? ['', pay] : []), ...(fee ? ['', fee] : []), ...(interestNote ? ['', interestNote] : []),
     '', c.close(ctx), '', signOff(cfg)
   ].join('\n');
-  const html = wrapHtml(p(greeting(customer)) + p(c.intro(ctx)) + tableHtml(r) + (pay ? p(pay) : '') + (fee ? p(fee) : '') + p(c.close(ctx)) + p(signOff(cfg)));
+  const html = wrapHtml(p(greeting(customer)) + p(c.intro(ctx)) + tableHtml(r) + (pay ? p(pay) : '') + (fee ? p(fee) : '') + (interestNote ? p(interestNote) : '') + p(c.close(ctx)) + p(signOff(cfg)));
   return { subject, text, html };
 }
 
